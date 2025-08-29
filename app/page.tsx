@@ -58,10 +58,7 @@ export default function Home() {
   const { address, isConnected, chainId } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [status, setStatus] = useState<string>("");
-    useEffect(() => {
-      console.log("Reown Project ID:", process.env.NEXT_PUBLIC_PROJECT_ID);
-    }, []);
-
+   
   async function handleClaim() {
     if (!isConnected || !address) {
       setStatus("Wallet not connected");
