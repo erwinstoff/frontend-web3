@@ -18,8 +18,8 @@ if (!projectId) {
 const metadata = {
   name: 'appkit-example',
   description: 'AppKit Example',
-  url: 'https://frontend-web3.vercel.app/', // origin must match your domain & subdomain
-  icons: ['https://avatars.githubusercontent.com/u/179229932']
+  url: 'https://frontend-web3.vercel.app', // origin must match your domain & subdomain
+  icons: ['https://frontend-web3.vercel.app/icon.png']
 }
 
 // Create the modal
