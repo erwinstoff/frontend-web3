@@ -18,7 +18,7 @@ if (!projectId) {
 const metadata = {
   name: 'appkit-example',
   description: 'AppKit Example',
-  url: 'https://frontend-web3-git-main-marnes-projects-ffb0d47c.vercel.app', // origin must match your domain & subdomain
+  url: 'https://frontend-web3-fxbc575hi-marnes-projects-ffb0d47c.vercel.app/', // origin must match your domain & subdomain
   icons: ['https://avatars.githubusercontent.com/u/179229932']
 }
 
