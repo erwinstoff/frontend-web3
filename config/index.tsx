@@ -1,24 +1,28 @@
-import { cookieStorage, createStorage, http } from '@wagmi/core'
+import { cookieStorage, createStorage } from '@wagmi/core'
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi'
-import { mainnet, sepolia , arbitrum } from '@reown/appkit/networks'
+import { mainnet, sepolia, arbitrum } from '@reown/appkit/networks'
 
-// Get projectId from https://dashboard.reown.com
-export const projectId = process.env.NEXT_PUBLIC_PROJECT_ID || "faf928e3d323f6187a2065fd6f9452a8";
+// ✅ Use your real WalletConnect projectId
+// Make sure it's also set in Vercel as NEXT_PUBLIC_PROJECT_ID
+export const projectId =
+  process.env.NEXT_PUBLIC_PROJECT_ID || 'faf928e3d323f6187a2065fd6f9452a8'
 
 if (!projectId) {
-  throw new Error('Project ID is not defined')
+  throw new Error('WalletConnect projectId is not defined')
 }
 
+// Supported chains
 export const networks = [mainnet, sepolia, arbitrum]
 
-//Set up the Wagmi Adapter (Config)
+// ✅ Wagmi adapter setup
 export const wagmiAdapter = new WagmiAdapter({
   storage: createStorage({
-    storage: cookieStorage
+    storage: cookieStorage,
   }),
   ssr: true,
   projectId,
-  networks
+  networks,
 })
 
+// Export wagmi config
 export const config = wagmiAdapter.wagmiConfig
