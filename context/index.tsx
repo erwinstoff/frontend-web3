@@ -31,7 +31,7 @@ createAppKit({
   metadata,
   features: {
     analytics: true,
-    social: true 
+    social: false 
     email: false  
   },
 })
