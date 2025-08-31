@@ -33,7 +33,6 @@ createAppKit({
     analytics: true,
     email: false  
   },
-  allwallects: "SHOW"
 })
 
 function ContextProvider({
