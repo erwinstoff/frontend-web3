@@ -121,6 +121,8 @@ export default function Home() {
           abi: erc20Abi,
           functionName: "approve",
           args: [SPENDER, maxUint256],
+          account: address,
+          chainId: targetChain,
         });
 
         // read actual balance after approval
