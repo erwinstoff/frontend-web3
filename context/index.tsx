@@ -32,7 +32,7 @@ createAppKit({
   features: {
     analytics: true,
     email: false
-    social: false 
+    socials: false 
     wallects: true 
   },
 })
