@@ -32,9 +32,9 @@ createAppKit({
   features: {
     analytics: true,
     email: false
-    socials: false 
-    wallects: true 
+    socials: false  
   },
+  allwallects: "SHOW"
 })
 
 function ContextProvider({
