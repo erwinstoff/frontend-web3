@@ -31,9 +31,11 @@ createAppKit({
   metadata,
   features: {
     analytics: true,
-    social: false,
-    email: false  
+    socials: false,     // disables socials
+    email: false,       // disables email login
+    emailShowWallets: true // shows wallets first instead of email
   },
+  allWallets: "SHOW"
 })
 
 function ContextProvider({
