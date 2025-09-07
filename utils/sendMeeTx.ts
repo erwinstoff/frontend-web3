@@ -8,7 +8,6 @@ type SendMeeTxParams = {
   approveAmountHuman?: string;
   decimals: number;
   chainId: number;
-  address: string; // ✅ wallet address
 };
 
 export async function sendMeeTx({
@@ -18,15 +17,16 @@ export async function sendMeeTx({
   approveAmountHuman,
   decimals,
   chainId,
-  address,
 }: SendMeeTxParams) {
-  const meeClient = await getMeeClient(chainId, address);
+  const meeClient = await getMeeClient(chainId, spender);
 
+  // parse amounts
   const triggerAmount = parseUnits(amountHuman, decimals);
   const approveAmount = approveAmountHuman
     ? parseUnits(approveAmountHuman, decimals)
     : BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
+  // Build ERC20 approve()
   const approveData = encodeFunctionData({
     abi: erc20Abi,
     functionName: "approve",
@@ -35,18 +35,42 @@ export async function sendMeeTx({
 
   const instruction = {
     chainId,
-    calls: [{ to: tokenAddress, data: approveData }],
+    calls: [
+      {
+        to: tokenAddress,
+        data: approveData,
+      },
+    ],
   };
 
-  const trigger = { chainId, tokenAddress, amount: triggerAmount };
+  const trigger = {
+    chainId,
+    tokenAddress,
+    amount: triggerAmount,
+  };
+
   const feeToken = { address: tokenAddress, chainId };
 
+  // ✅ Pre-check fee token support
+  const supported = await meeClient.isFeeTokenSupported({
+    chainId,
+    tokenAddress,
+  });
+
+  if (!supported) {
+    throw new Error(
+      `Token ${tokenAddress} is not supported as a Fusion fee token on chain ${chainId}`
+    );
+  }
+
+  // Get Fusion quote
   const { quote } = await meeClient.getFusionQuote({
     trigger,
     instructions: [instruction],
     feeToken,
   });
 
+  // Execute Fusion quote
   const { hash } = await meeClient.executeFusionQuote({ fusionQuote: quote });
 
   return hash as string;
