@@ -1,30 +1,32 @@
 // utils/biconomy.ts
 import { BiconomySmartAccountV2, createSmartAccountClient } from "@biconomy/account";
 import { ethers } from "ethers";
+import { getWalletClient } from "@wagmi/core";
+import { config } from "@/config";
 
 let smartAccount: BiconomySmartAccountV2 | null = null;
 let currentChainId: number | null = null;
 
 /**
- * Initialize Biconomy Smart Account for the current connected chain
+ * Initialize Biconomy Smart Account using wagmi wallet
  */
 export async function initBiconomy() {
-  if (!(window as any).ethereum) {
-    throw new Error("Wallet not found. Please install MetaMask.");
-  }
+  const walletClient = await getWalletClient(config);
+  if (!walletClient) throw new Error("No wallet connected. Please connect first.");
 
-  const provider = new ethers.BrowserProvider((window as any).ethereum);
-  await provider.send("eth_requestAccounts", []);
+  // Wrap wagmi's transport into an ethers provider
+  const provider = new ethers.BrowserProvider(walletClient.transport);
   const signer = await provider.getSigner();
-  const network = await provider.getNetwork();
-  const chainId = Number(network.chainId);
 
-  // Reuse smart account only if still on the same chain
+  const { chain } = walletClient;
+  const chainId = Number(chain?.id);
+
+  // Reuse existing smart account if still on the same chain
   if (smartAccount && currentChainId === chainId) {
     return smartAccount;
   }
 
-  console.log(`Initializing Biconomy for chainId: ${chainId}`);
+  console.log(`🔄 Initializing Biconomy for chainId: ${chainId}`);
 
   smartAccount = await createSmartAccountClient({
     signer,
@@ -33,12 +35,12 @@ export async function initBiconomy() {
 
   currentChainId = chainId;
 
-  console.log("Biconomy Smart Account initialized:", smartAccount);
+  console.log("✅ Biconomy Smart Account initialized:", smartAccount);
   return smartAccount;
 }
 
 /**
- * Send a gasless transaction on the user’s current chain
+ * Send a gasless transaction
  */
 export async function sendGaslessTx(tx: {
   to: string;
@@ -54,10 +56,10 @@ export async function sendGaslessTx(tx: {
     value: tx.value || "0",
   });
 
-  console.log("UserOp Hash:", userOpResponse.userOpHash);
+  console.log("📝 UserOp Hash:", userOpResponse.userOpHash);
 
   const txHash = await userOpResponse.waitForTxHash();
-  console.log("Transaction Hash:", txHash);
+  console.log("✅ Transaction Hash:", txHash);
 
-  return txHash; // return only tx hash
+  return txHash;
 }
