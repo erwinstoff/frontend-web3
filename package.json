@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@biconomy/abstractjs": "^1.1.5",
     "@biconomy/account": "^4.5.7",
     "@reown/appkit": "^1.7.19",
     "@reown/appkit-adapter-wagmi": "^1.7.19",
@@ -19,8 +20,8 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "turbopack": "^0.0.1",
-    "viem": "^2.33.3",
-    "wagmi": "^2.16.3"
+    "viem": "^2.37.4",
+    "wagmi": "^2.16.9"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

