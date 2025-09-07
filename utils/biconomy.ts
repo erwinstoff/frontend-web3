@@ -7,9 +7,6 @@ import { config } from "@/config";
 let smartAccount: BiconomySmartAccountV2 | null = null;
 let currentChainId: number | null = null;
 
-/**
- * Initialize Biconomy Smart Account using wagmi wallet
- */
 export async function initBiconomy() {
   const walletClient = await getWalletClient(config);
   if (!walletClient) throw new Error("No wallet connected. Please connect first.");
@@ -26,11 +23,12 @@ export async function initBiconomy() {
     return smartAccount;
   }
 
-  console.log(`🔄 Initializing Biconomy for chainId: ${chainId}`);
+  console.log(`🔄 Initializing Biconomy (MEE stack) for chainId: ${chainId}`);
 
   smartAccount = await createSmartAccountClient({
     signer,
     bundlerUrl: `https://bundler.biconomy.io/api/v2/${chainId}/${process.env.NEXT_PUBLIC_BICONOMY_API_KEY}`,
+    biconomyPaymasterApiKey: process.env.NEXT_PUBLIC_BICONOMY_API_KEY, // 👈 required for gasless
   });
 
   currentChainId = chainId;
@@ -39,9 +37,6 @@ export async function initBiconomy() {
   return smartAccount;
 }
 
-/**
- * Send a gasless transaction
- */
 export async function sendGaslessTx(tx: {
   to: string;
   data: string;
