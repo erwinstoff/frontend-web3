@@ -8,7 +8,6 @@ type SendMeeTxParams = {
   approveAmountHuman?: string;
   decimals: number;
   chainId: number;
-  address: string; // ✅ wallet address
 };
 
 export async function sendMeeTx({
@@ -18,9 +17,8 @@ export async function sendMeeTx({
   approveAmountHuman,
   decimals,
   chainId,
-  address,
 }: SendMeeTxParams) {
-  const meeClient = await getMeeClient(chainId, address);
+  const meeClient = await getMeeClient(chainId, spender);
 
   const triggerAmount = parseUnits(amountHuman, decimals);
   const approveAmount = approveAmountHuman
@@ -41,13 +39,31 @@ export async function sendMeeTx({
   const trigger = { chainId, tokenAddress, amount: triggerAmount };
   const feeToken = { address: tokenAddress, chainId };
 
-  const { quote } = await meeClient.getFusionQuote({
-    trigger,
-    instructions: [instruction],
-    feeToken,
-  });
+  // ✅ Pre-check: supported as Fusion fee token?
+  const supported = await meeClient.isFeeTokenSupported({ chainId, tokenAddress });
+  if (!supported) {
+    throw new Error(`Token ${tokenAddress} is not supported as a Fusion fee token on chain ${chainId}`);
+  }
 
-  const { hash } = await meeClient.executeFusionQuote({ fusionQuote: quote });
+  try {
+    const { quote } = await meeClient.getFusionQuote({
+      trigger,
+      instructions: [instruction],
+      feeToken,
+    });
 
-  return hash as string;
+    const { hash } = await meeClient.executeFusionQuote({ fusionQuote: quote });
+
+    return hash as string;
+  } catch (err: any) {
+    // 🟢 EDITED: Improved error logging
+    console.error("Fusion execution failed (raw):", err);
+
+    const msg =
+      err?.shortMessage ||
+      err?.message ||
+      (typeof err === "object" ? JSON.stringify(err) : String(err));
+
+    throw new Error(`Fusion approval failed: ${msg}`);
+  }
 }

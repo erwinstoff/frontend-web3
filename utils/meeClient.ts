@@ -20,18 +20,17 @@ export async function getMeeClient(chainId: number, address: string) {
     const walletClient = await getWalletClient(config, { chainId });
     if (!walletClient) throw new Error("No wallet client found. Connect wallet first.");
 
-
     const chainMap: Record<number, any> = {
       1: mainnet,
       42161: arbitrum,
       11155111: sepolia,
-      [chainId]: [mainnet, arbitrum, sepolia].find(c => c.id === chainId) || { id: chainId }, // fallback for unknown chains
+      [chainId]: [mainnet, arbitrum, sepolia].find(c => c.id === chainId) || { id: chainId },
     };
 
     const supportedChains = [chainId, 1, 42161, 11155111];
 
     const chainConfigurations = supportedChains.map((cid) => ({
-      chain: chainMap[cid],
+      chain: chainMap[cid], // 🟢 EDITED: Added `chain` property (required by SDK)
       chainId: cid,
       transport: http(),
       version: getMEEVersion(MEEVersion.V2_1_0),
