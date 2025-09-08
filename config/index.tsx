@@ -5,7 +5,7 @@ import { mainnet, sepolia, arbitrum } from '@reown/appkit/networks'
 // ✅ Use your real WalletConnect projectId
 // Make sure it's also set in Vercel as NEXT_PUBLIC_PROJECT_ID
 export const projectId =
-  process.env.NEXT_PUBLIC_PROJECT_ID || "faf928e3d323f6187a2065fd6f9452a8";
+  process.env.NEXT_PUBLIC_PROJECT_ID;
 
 if (!projectId) {
   throw new Error('WalletConnect projectId is not defined')
