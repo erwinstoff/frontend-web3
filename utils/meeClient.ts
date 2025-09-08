@@ -14,9 +14,9 @@ const meeClients: Record<string, Promise<any>> = {};
 
 // ✅ Use dedicated RPCs instead of default public ones
 const RPCS: Record<number, string> = {
-  1: "https://eth-mainnet.g.alchemy.com/v2/1NchczMp7D3slL3ERdF7kC-1i4oj3ByT",
-  42161: "https://arb-mainnet.g.alchemy.com/v2/1NchczMp7D3slL3ERdF7kC-1i4oj3ByT",
-  11155111: "https://eth-sepolia.g.alchemy.com/v2/1NchczMp7D3slL3ERdF7kC-1i4oj3ByT",
+  1: `https://mainnet.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_API_KEY}`,
+  42161: `https://arbitrum.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_API_KEY}`,
+  11155111: `https://sepolia.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_API_KEY}`,
 };
 
 export async function getMeeClient(chainId: number, address: string) {
