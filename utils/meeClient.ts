@@ -12,6 +12,13 @@ import { http } from "viem";
 // Cache per chainId + address
 const meeClients: Record<string, Promise<any>> = {};
 
+// ✅ Use dedicated RPCs instead of default public ones
+const RPCS: Record<number, string> = {
+  1: `https://eth-mainnet.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_KEY}`,
+  42161: `https://arb-mainnet.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_KEY}`,
+  11155111: `https://eth-sepolia.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_KEY}`,
+};
+
 export async function getMeeClient(chainId: number, address: string) {
   const key = `${chainId}:${address}`;
   if (Object.prototype.hasOwnProperty.call(meeClients, key)) return meeClients[key];
@@ -30,9 +37,9 @@ export async function getMeeClient(chainId: number, address: string) {
     const supportedChains = [chainId, 1, 42161, 11155111];
 
     const chainConfigurations = supportedChains.map((cid) => ({
-      chain: chainMap[cid], // 🟢 EDITED: Added `chain` property (required by SDK)
+      chain: chainMap[cid],
       chainId: cid,
-      transport: http(),
+      transport: http(RPCS[cid] || ""), // ✅ use custom RPC
       version: getMEEVersion(MEEVersion.V2_1_0),
     }));
 
