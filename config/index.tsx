@@ -39,7 +39,7 @@ export const TOKENS_BY_CHAIN: Record<number, { address: string; symbol: string; 
     { address: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', symbol: 'WBTC', decimals: 8 },
   ],
   [sepolia.id]: [
-    { address: '0x1234567890abcdef1234567890abcdef12345678', symbol: 'USDC', decimals: 6 }, // dummy
+    { address: '0x1234567890abcdef1234567890abcdef12345678', symbol: 'USDC', decimals: 6 }, // dummy test token
   ],
 }
 
@@ -55,3 +55,6 @@ export const CHAIN_BY_ID: Record<number, any> = {
   [arbitrum.id]: arbitrum,
   [sepolia.id]: sepolia,
 }
+
+// placeholder — can be extended if needed
+export const transports: Record<number, any> = {}
