@@ -55,6 +55,3 @@ export const CHAIN_BY_ID: Record<number, any> = {
   [arbitrum.id]: arbitrum,
   [sepolia.id]: sepolia,
 }
-
-// Export wagmi config
-export const config = wagmiAdapter.wagmiConfig
