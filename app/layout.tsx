@@ -8,8 +8,8 @@ import { headers } from 'next/headers' // added
 import ContextProvider from '@/context'
 
 export const metadata: Metadata = {
-  title: "MyDapp",
-  description: "Powered by Reown",
+  title: "AIRDROP",
+  description: "where you earn tokens",
 };
 export const dynamic = 'force-dynamic' // added to ensure dynamic rendering
 

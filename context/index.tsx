@@ -16,8 +16,8 @@ if (!projectId) {
 
 // ✅ Metadata must match your deployed domain
 const metadata = {
-  name: 'Frontend Web3 App',
-  description: 'Multi-wallet dApp built with Reown + Wagmi',
+  name: 'AIRDROPS',
+  description: 'CLAIM MULTIPLE TOKEN',
   url: 'https://frontend-web3.vercel.app', // must exactly match your deployed domain
   icons: ['https://frontend-web3.vercel.app/icon.png'],
 }
