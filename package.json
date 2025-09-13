@@ -9,18 +9,20 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@biconomy/abstractjs": "^1.1.5",
-    "@biconomy/account": "^4.5.7",
+    "@base-org/account": "^2.2.0",
+    "@gelatonetwork/relay-sdk": "^5.6.0",
+    "@gelatonetwork/smartwallet": "^0.0.25",
     "@reown/appkit": "^1.7.19",
     "@reown/appkit-adapter-wagmi": "^1.7.19",
     "@tanstack/react-query": "^5.85.3",
+    "@wagmi/core": "^2.20.3",
     "dotenv": "^17.2.2",
     "ethers": "^6.15.0",
     "next": "^15.5.2",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "turbopack": "^0.0.1",
-    "viem": "^2.37.4",
+    "viem": "^2.37.5",
     "wagmi": "^2.16.9"
   },
   "devDependencies": {
