@@ -1,11 +1,13 @@
 'use client'
 
+// 1. First, update your ContextProvider.tsx to include Gelato
 import { wagmiAdapter, projectId } from '@/config'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createAppKit } from '@reown/appkit/react'
 import { mainnet, arbitrum, sepolia } from '@reown/appkit/networks'
 import React, { type ReactNode } from 'react'
 import { cookieToInitialState, WagmiProvider, type Config } from 'wagmi'
+import { GelatoSmartWalletProvider } from '@gelatonetwork/smartwallet-react-wagmi'
 
 // Setup query client
 const queryClient = new QueryClient()
@@ -55,7 +57,14 @@ function ContextProvider({
       config={wagmiAdapter.wagmiConfig as Config}
       initialState={initialState}
     >
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        {/* Add Gelato Smart Wallet Provider */}
+        <GelatoSmartWalletProvider 
+          apiKey={process.env.NEXT_PUBLIC_GELATO_API_KEY!}
+        >
+          {children}
+        </GelatoSmartWalletProvider>
+      </QueryClientProvider>
     </WagmiProvider>
   )
 }

