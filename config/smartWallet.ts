@@ -4,13 +4,14 @@
 import { createGelatoSmartWalletClient, sponsored } from "@gelatonetwork/smartwallet";
 import { gelato } from "@gelatonetwork/smartwallet/accounts";
 import { createWalletClient, createPublicClient, http, type Hex, type Address } from "viem";
-import { mainnet, base, arbitrum, polygon } from "viem/chains";
+import { mainnet, base, arbitrum, polygon, sepolia } from "viem/chains";
 
 const CHAIN_MAP = {
   1: mainnet,
   8453: base,
   42161: arbitrum,
   137: polygon,
+  11155111: sepolia,
 } as const;
 
 export class SmartWalletService {
