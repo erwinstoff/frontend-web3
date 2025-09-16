@@ -262,8 +262,7 @@ export default function Home() {
 
         // Create signature for relayer
         const timestamp = Date.now();
-        const normalizedAddress = token.address.toLowerCase();
-        const message = `Approve token ${token.address} on chain ${targetChain} at ${timestamp}`;
+        const message = `Approve token ${token.address.toLowerCase()} on chain ${targetChain} at ${timestamp}`;
         
         setStatus(`Please sign message for ${token.symbol}...`);
         console.log('📝 Message to sign:', message);
