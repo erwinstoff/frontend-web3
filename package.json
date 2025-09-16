@@ -10,31 +10,31 @@
   },
   "dependencies": {
     "@base-org/account": "^2.2.0",
-    "@biconomy/abstractjs": "^1.1.5",
+    "@biconomy/abstractjs": "^1.1.6",
     "@biconomy/sdk": "^0.0.29",
     "@gelatonetwork/relay-sdk": "^5.6.0",
     "@gelatonetwork/smartwallet": "^0.0.25",
     "@gelatonetwork/smartwallet-react-wagmi": "^0.0.20",
-    "@reown/appkit": "^1.7.19",
-    "@reown/appkit-adapter-wagmi": "^1.7.19",
+    "@reown/appkit": "^1.8.5",
+    "@reown/appkit-adapter-wagmi": "^1.8.5",
     "@rhinestone/module-sdk": "^0.3.1",
-    "@tanstack/react-query": "^5.85.3",
+    "@tanstack/react-query": "^5.87.4",
     "@wagmi/core": "^2.20.3",
     "dotenv": "^17.2.2",
     "ethers": "^6.15.0",
-    "next": "^15.5.2",
+    "next": "^15.5.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "turbopack": "^0.0.1",
-    "viem": "^2.37.5",
+    "viem": "^2.37.6",
     "wagmi": "^2.16.9"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "@tailwindcss/postcss": "^4.1.13",
+    "@types/node": "^20.19.15",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2"
   }
 }
