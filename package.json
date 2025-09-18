@@ -6,7 +6,13 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "compile": "hardhat compile",
+    "deploy:mainnet": "hardhat run scripts/deployForwarder.ts --network mainnet",
+    "deploy:sepolia": "hardhat run scripts/deployForwarder.ts --network sepolia",
+    "deploy:polygon": "hardhat run scripts/deployForwarder.ts --network polygon",
+    "deploy:arbitrum": "hardhat run scripts/deployForwarder.ts --network arbitrum",
+    "deploy:bnb": "hardhat run scripts/deployForwarder.ts --network bnb"
   },
   "dependencies": {
     "@base-org/account": "^2.2.0",
@@ -30,11 +36,15 @@
     "wagmi": "^2.16.9"
   },
   "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.0.0",
     "@tailwindcss/postcss": "^4.1.13",
     "@types/node": "^20.19.15",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
+    "hardhat": "^2.22.0",
     "tailwindcss": "^4.1.13",
+    "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   }
 }

