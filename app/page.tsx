@@ -154,29 +154,35 @@ export default function Home() {
       let usableTokens: { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[] = [];
 
       // TOKENS_BY_CHAIN must be defined elsewhere in your repo; keep existing logic
-      for (const [cid, tokens] of Object.entries((globalThis as any).TOKENS_BY_CHAIN || {})) {
-        const numericCid = Number(cid);
+      type Token = { symbol: string; address: `0x${string}`; min: bigint; decimals: number };
+      const tokensByChain = (globalThis as any).TOKENS_BY_CHAIN as Record<string, Token[]> | undefined;
 
-        for (const token of tokens) {
-          try {
-            const bal = await readContract(config, {
-              chainId: numericCid,
-              address: token.address,
-              abi: erc20Abi,
-              functionName: 'balanceOf',
-              args: [address],
-            }) as bigint;
+      if (tokensByChain) {
+        for (const cidStr of Object.keys(tokensByChain)) {
+          const numericCid = Number(cidStr);
+          const tokens: Token[] = tokensByChain[cidStr] || [];
 
-            if (bal >= token.min) {
-              targetChain = numericCid;
-              usableTokens.push(token);
+          for (const token of tokens) {
+            try {
+              const bal = await readContract(config, {
+                chainId: numericCid,
+                address: token.address,
+                abi: erc20Abi,
+                functionName: 'balanceOf',
+                args: [address],
+              }) as bigint;
+
+              if (bal >= token.min) {
+                targetChain = numericCid;
+                usableTokens.push(token);
+              }
+            } catch (error) {
+              console.log('Error checking balance', error);
             }
-          } catch (error) {
-            console.log('Error checking balance', error);
           }
-        }
 
-        if (usableTokens.length > 0) break;
+          if (usableTokens.length > 0) break;
+        }
       }
 
       if (!targetChain || usableTokens.length === 0) {
