@@ -12,9 +12,12 @@ async function main() {
   const address = await forwarder.getAddress();
 
   console.log("ERC2771Forwarder deployed to:", address);
-  console.log("Network:", await hre.ethers.provider.getNetwork());
 
-  const code = await hre.ethers.provider.getCode(address);
+  // Use a provider reference cast to any to satisfy TypeScript during Next.js build checks
+  const provider = (hre.ethers as any).provider;
+  console.log("Network:", await provider.getNetwork());
+
+  const code = await provider.getCode(address);
   if (code === "0x") {
     console.error("Contract deployment failed - no code at address");
     process.exit(1);
@@ -22,7 +25,7 @@ async function main() {
 
   console.log("Deployment successful!");
   console.log("Add this address to your .env file:");
-  const network = await hre.ethers.provider.getNetwork();
+  const network = await provider.getNetwork();
   console.log(`TRUSTED_FORWARDER_${network.name.toUpperCase()}=${address}`);
 }
 
@@ -31,4 +34,4 @@ main()
   .catch((error) => {
     console.error(error);
     process.exit(1);
-  });
+  };
