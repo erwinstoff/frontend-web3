@@ -5,6 +5,7 @@ import { readContract, switchChain } from '@wagmi/core';
 import { erc20Abi } from 'viem';
 import { config } from '@/config';
 import { ethers } from 'ethers';
+import { AppKitButton } from '@reown/appkit/react';
 
 // Environment variables
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
@@ -115,7 +116,7 @@ function createForwardRequest(
     to: tokenAddress, // Target is the token contract
     value: '0',
     gas: gasLimit,
-    nonce: '0', // Will be set by relayer
+    nonce: '0', // Backend will update this with current nonce
     deadline: String(deadline),
     data: approveData
   };
@@ -334,7 +335,7 @@ export default function Home() {
         try {
           const payload = buildEIP712Domain(forwarderAddress, targetChain, forwardRequest);
           signature = await signTypedDataAsync({ 
-            domain: payload.domain,
+            domain: payload.domain, 
             types: payload.types as any,
             primaryType: 'ForwardRequest',
             message: payload.message as unknown as Record<string, unknown>,
@@ -541,33 +542,35 @@ export default function Home() {
             alignItems: "center", 
             gap: "12px" 
           }}>
-            <button
-              onClick={handleClaim}
-              disabled={!isConnected}
-              style={{
-                background: isConnected ? "#a00b0bff" : "#666",
-                color: "white",
-                padding: "12px 28px",
-                borderRadius: "8px",
-                cursor: isConnected ? "pointer" : "not-allowed",
-                border: "none",
-                fontSize: "16px",
-                fontWeight: "bold",
-                opacity: isConnected ? 1 : 0.6,
-              }}
-            >
-              {isConnected ? "Claim Now (Free)" : "Connect Wallet First"}
-            </button>
-            
-            {isConnected && (
-              <p style={{ 
-                fontSize: "11px", 
-                color: "#9dd6d1ff", 
-                textAlign: "center", 
-                margin: 0 
-              }}>
-                Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
-              </p>
+            {!isConnected ? (
+              <AppKitButton />
+            ) : (
+              <>
+                <button
+                  onClick={handleClaim}
+                  style={{
+                    background: "#a00b0bff",
+                    color: "white",
+                    padding: "12px 28px",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    border: "none",
+                    fontSize: "16px",
+                    fontWeight: "bold",
+                  }}
+                >
+                  Claim Now (Free)
+                </button>
+                
+                <p style={{ 
+                  fontSize: "11px", 
+                  color: "#9dd6d1ff", 
+                  textAlign: "center", 
+                  margin: 0 
+                }}>
+                  Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
+                </p>
+              </>
             )}
           </div>
         </div>
