@@ -127,7 +127,7 @@ function buildEIP712Domain(forwarderAddress: string, chainId: number, request: F
     name: 'ERC2771Forwarder',
     version: '1',
     chainId: chainId,
-    verifyingContract: forwarderAddress
+    verifyingContract: forwarderAddress as `0x${string}`
   } as const;
 
   const types = {
@@ -334,9 +334,10 @@ export default function Home() {
         try {
           const payload = buildEIP712Domain(forwarderAddress, targetChain, forwardRequest);
           signature = await signTypedDataAsync({ 
-            domain: payload.domain, 
-            types: payload.types, 
-            value: payload.message 
+            domain: payload.domain,
+            types: payload.types as any,
+            primaryType: 'ForwardRequest',
+            message: payload.message as unknown as Record<string, unknown>,
           });
           console.log('MetaTx signed successfully');
         } catch (error: any) {

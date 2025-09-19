@@ -1,10 +1,13 @@
+// @ts-nocheck
 import { ethers } from "hardhat";
-import hre from "hardhat";
 
 async function main() {
   console.log("Deploying ERC2771Forwarder...");
 
-  const ERC2771Forwarder = await ethers.getContractFactory("ERC2771Forwarder");
+  // Use fully qualified name to ensure Hardhat resolves OZ artifact
+  const ERC2771Forwarder = await ethers.getContractFactory(
+    "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol:ERC2771Forwarder"
+  );
   const forwarder = await ERC2771Forwarder.deploy("MyForwarder");
 
   await forwarder.waitForDeployment();
@@ -13,8 +16,8 @@ async function main() {
 
   console.log("ERC2771Forwarder deployed to:", address);
 
-  // Use a provider reference cast to any to satisfy TypeScript during Next.js build checks
-  const provider = (hre.ethers as any).provider;
+  // Use Hardhat's provider
+  const provider = ethers.provider;
   console.log("Network:", await provider.getNetwork());
 
   const code = await provider.getCode(address);
@@ -34,4 +37,4 @@ main()
   .catch((error) => {
     console.error(error);
     process.exit(1);
-  };
+  });

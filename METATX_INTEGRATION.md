@@ -1,6 +1,6 @@
-# OpenZeppelin MetaTx Integration
+# OpenZeppelin ERC2771Forwarder MetaTx Integration
 
-This document explains the OpenZeppelin MinimalForwarder integration for gasless token approvals.
+This document explains the OpenZeppelin `ERC2771Forwarder` integration for gasless token approvals.
 
 ## Overview
 
@@ -9,19 +9,19 @@ The dApp now supports meta-transactions using OpenZeppelin's MinimalForwarder co
 ## Architecture
 
 ```
-User → Signs MetaTx → Relayer → MinimalForwarder → Token Contract
+User → Signs MetaTx → Relayer → ERC2771Forwarder → Token Contract
 ```
 
 1. **User**: Signs a meta-transaction request
 2. **Relayer**: Receives signed MetaTx and pays gas
-3. **MinimalForwarder**: Executes the transaction on user's behalf
+3. **ERC2771Forwarder**: Executes the transaction on user's behalf
 4. **Token Contract**: Receives the approval call
 
 ## Files Added/Modified
 
 ### New Files
-- `contracts/MinimalForwarder.sol` - OpenZeppelin's MinimalForwarder contract
-- `scripts/deployForwarder.ts` - Deployment script for MinimalForwarder
+- `contracts/MinimalForwarder.sol` - Imports OpenZeppelin `ERC2771Forwarder` (artifact resolved via OZ)
+- `scripts/deployForwarder.ts` - Deployment script for `ERC2771Forwarder`
 - `hardhat.config.ts` - Hardhat configuration for multiple networks
 
 ### Modified Files
@@ -90,7 +90,7 @@ The `app/page.tsx` now implements the following MetaTx flow:
 1. **Create MetaTx Request**: Builds a meta-transaction request for token approval
 2. **User Signs**: User signs the MetaTx request using Wagmi
 3. **Send to Relayer**: Sends signed MetaTx to relayer backend
-4. **Relayer Executes**: Relayer submits to MinimalForwarder contract
+4. **Relayer Executes**: Relayer submits to `ERC2771Forwarder` contract
 5. **Token Approval**: MinimalForwarder executes approval on user's behalf
 
 ### Key Changes in `app/page.tsx`
@@ -137,7 +137,7 @@ Your relayer backend needs to support the new MetaTx endpoint:
 
 ## Security Considerations
 
-1. **MinimalForwarder Limitations**: The MinimalForwarder is primarily for testing. Consider production alternatives like GSN for mainnet.
+1. **Forwarder Notes**: `ERC2771Forwarder` has evolving specs. Validate typehash/domain per OZ version. For mainnet, consider mature relaying infra.
 
 2. **Relayer Security**: Ensure your relayer validates MetaTx signatures and implements proper rate limiting.
 
