@@ -308,7 +308,7 @@ export default function Home() {
 
   return (
     <main style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, marginTop: 40 }}>
-      <header style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 64, background: '#09011fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px'[...]
+      <header style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 64, background: '#09011fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>
         <div style={{ fontFamily: 'sans-serif', fontWeight: 'bold', fontSize: 18, color: '#aaa587ff' }}>AIRDROPS</div>
         <div />
       </header>
