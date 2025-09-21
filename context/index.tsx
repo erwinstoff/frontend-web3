@@ -4,11 +4,20 @@ import { wagmiAdapter, projectId } from '@/config'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createAppKit } from '@reown/appkit/react'
 import { mainnet, arbitrum, sepolia } from '@reown/appkit/networks'
-import React, { type ReactNode } from 'react'
+import React, { type ReactNode, useMemo } from 'react'
 import { cookieToInitialState, WagmiProvider, type Config } from 'wagmi'
 
-// Setup query client
-const queryClient = new QueryClient()
+// Setup query client with optimized configuration
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      gcTime: 10 * 60 * 1000, // 10 minutes (formerly cacheTime)
+      retry: 2,
+      refetchOnWindowFocus: false,
+    },
+  },
+})
 
 if (!projectId) {
   throw new Error('WalletConnect projectId is not defined')
@@ -45,9 +54,12 @@ function ContextProvider({
   children: ReactNode
   cookies: string | null
 }) {
-  const initialState = cookieToInitialState(
-    wagmiAdapter.wagmiConfig as Config,
-    cookies
+  // Memoize the initial state to prevent unnecessary re-computations
+  const initialState = useMemo(() => 
+    cookieToInitialState(
+      wagmiAdapter.wagmiConfig as Config,
+      cookies
+    ), [cookies]
   )
 
   return (

